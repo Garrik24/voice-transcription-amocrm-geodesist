@@ -358,21 +358,30 @@ class AmoCRMService:
             logger.error(f"Ошибка получения контакта {contact_id}: {e}")
             raise
     
-    async def add_note_to_lead(self, lead_id: int, text: str) -> bool:
+    async def add_note_to_entity(self, entity_id: int, text: str, entity_type: str = "leads") -> bool:
         """
-        Добавляет примечание к сделке.
+        Добавляет примечание к сущности (сделке, контакту, компании).
         
         Args:
-            lead_id: ID сделки
+            entity_id: ID сущности
             text: Текст примечания
+            entity_type: Тип сущности (leads, contacts, companies)
             
         Returns:
             True если успешно
         """
         try:
-            async with httpx.AsyncClient() as client:
+            # Приводим entity_type к множественному числу если нужно
+            if entity_type == "lead":
+                entity_type = "leads"
+            elif entity_type == "contact":
+                entity_type = "contacts"
+            elif entity_type == "company":
+                entity_type = "companies"
+            
+            async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
                 response = await client.post(
-                    f"{self.base_url}/leads/{lead_id}/notes",
+                    f"{self.base_url}/{entity_type}/{entity_id}/notes",
                     headers=self.headers,
                     json=[{
                         "note_type": "common",
@@ -381,13 +390,21 @@ class AmoCRMService:
                         }
                     }]
                 )
+                
+                if response.status_code == 400:
+                    logger.error(f"AmoCRM вернул 400: {response.text}")
+                
                 response.raise_for_status()
-                logger.info(f"Примечание добавлено к сделке {lead_id}")
+                logger.info(f"Примечание добавлено к {entity_type}/{entity_id}")
                 return True
                 
         except Exception as e:
-            logger.error(f"Ошибка добавления примечания к сделке {lead_id}: {e}")
+            logger.error(f"Ошибка добавления примечания к {entity_type}/{entity_id}: {e}")
             raise
+    
+    async def add_note_to_lead(self, lead_id: int, text: str) -> bool:
+        """Обратная совместимость"""
+        return await self.add_note_to_entity(lead_id, text, "leads")
     
     async def get_user(self, user_id: int) -> Optional[Dict[str, Any]]:
         """

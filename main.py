@@ -127,9 +127,9 @@ async def process_call(
             manager_name=manager_name
         )
         
-        # 7. Сохраняем в AmoCRM
-        logger.info(f"💾 Сохраняем в сделку #{lead_id}...")
-        await amocrm_service.add_note_to_lead(lead_id, note_text)
+        # 7. Сохраняем в AmoCRM (в правильную сущность - lead или contact)
+        logger.info(f"💾 Сохраняем в {entity_type}/{lead_id}...")
+        await amocrm_service.add_note_to_entity(lead_id, note_text, entity_type)
         
         # 8. Отправляем красивый анализ в Telegram
         call_datetime = datetime.now().strftime("%d.%m.%Y %H:%M")
