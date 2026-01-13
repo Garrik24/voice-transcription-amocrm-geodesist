@@ -90,19 +90,48 @@ async def process_call(
         
         # 2. Скачиваем запись
         logger.info("📥 Скачиваем запись звонка...")
+        await telegram_service.send_message(
+            f"📥 [2/7] Скачиваем запись...\nСделка: #{lead_id}",
+            disable_notification=True
+        )
+        
         audio_data = await amocrm_service.download_call_recording(record_url)
         
         if len(audio_data) < 10000:  # Меньше 10KB - слишком маленький файл
             logger.warning(f"⚠️ Файл слишком маленький ({len(audio_data)} байт), пропускаем")
+            await telegram_service.send_message(
+                f"⚠️ Файл слишком маленький ({len(audio_data)} байт)!\nПропускаем...",
+                disable_notification=False
+            )
             return
+        
+        await telegram_service.send_message(
+            f"✅ [2/7] Скачано: {len(audio_data)} байт",
+            disable_notification=True
+        )
         
         # 3. Транскрибируем с диаризацией
         logger.info("🎙️ Транскрибация с диаризацией...")
+        await telegram_service.send_message(
+            f"🎙️ [3/7] Транскрибация через AssemblyAI...\n(может занять 1-3 минуты)",
+            disable_notification=True
+        )
+        
         transcription = await transcription_service.transcribe_audio(audio_data)
         
         if not transcription.full_text or len(transcription.full_text) < 50:
             logger.warning("⚠️ Транскрибация слишком короткая, пропускаем")
+            await telegram_service.send_message(
+                f"⚠️ Транскрибация слишком короткая: {len(transcription.full_text or '')} символов",
+                disable_notification=False
+            )
             return
+        
+        await telegram_service.send_message(
+            f"✅ [3/7] Транскрибировано: {len(transcription.full_text)} символов\n"
+            f"Длительность: {transcription.duration_seconds:.0f} сек",
+            disable_notification=True
+        )
         
         # 4. Определяем роли (менеджер/клиент)
         roles = transcription_service.identify_roles(transcription.speakers)
@@ -112,14 +141,28 @@ async def process_call(
         )
         
         logger.info(f"📝 Транскрибация: {len(formatted_transcript)} символов")
+        await telegram_service.send_message(
+            f"👥 [4/7] Роли определены\n{len(transcription.speakers)} реплик",
+            disable_notification=True
+        )
         
         # 5. Анализируем через GPT
         logger.info("🤖 Анализ разговора через GPT...")
+        await telegram_service.send_message(
+            f"🤖 [5/7] Анализ через GPT...",
+            disable_notification=True
+        )
+        
         call_type_simple = "outgoing" if "outgoing" in call_type else "incoming"
         analysis = await analysis_service.analyze_call(
             formatted_transcript,
             call_type=call_type_simple,
             manager_name=manager_name
+        )
+        
+        await telegram_service.send_message(
+            f"✅ [5/7] Анализ завершён\nКлиент: {analysis.client_name}\nГород: {analysis.city}",
+            disable_notification=True
         )
         
         # 6. Формируем примечание
@@ -130,11 +173,20 @@ async def process_call(
             manager_name=manager_name
         )
         
+        await telegram_service.send_message(
+            f"📝 [6/7] Примечание сформировано: {len(note_text)} символов",
+            disable_notification=True
+        )
+        
         # 7. Сохраняем в AmoCRM
         logger.info(f"💾 Сохраняем примечание в сделку #{lead_id}...")
+        await telegram_service.send_message(
+            f"💾 [7/7] Сохраняем в AmoCRM...",
+            disable_notification=True
+        )
         await amocrm_service.add_note_to_lead(lead_id, note_text)
         
-        # 8. Отправляем уведомление об успехе (опционально)
+        # 8. Отправляем уведомление об успехе
         await telegram_service.send_success(
             lead_id=lead_id,
             client_name=analysis.client_name,
@@ -194,15 +246,15 @@ async def amocrm_webhook(request: Request, background_tasks: BackgroundTasks):
             disable_notification=True
         )
         
-        # ЛОГИКА ИЗ MAKE.COM:
-        # 1. Получаем ВСЕ звонки за последний час (как в Make: filter[created_at][from])
-        logger.info(f"🔍 Запрашиваем звонки за последний час...")
-        events = await amocrm_service.get_recent_calls(hours=1)
+        # ЛОГИКА:
+        # 1. Получаем звонки за последние 10 минут (для немедленной обработки)
+        logger.info(f"🔍 Запрашиваем звонки за последние 10 минут...")
+        events = await amocrm_service.get_recent_calls(minutes=10)
         
         if not events:
-            logger.info(f"📭 Нет звонков за последний час")
+            logger.info(f"📭 Нет звонков за последние 10 минут")
             await telegram_service.send_message(
-                f"📭 Нет звонков за последний час",
+                f"📭 Нет звонков за последние 10 минут",
                 disable_notification=True
             )
             return JSONResponse(content={"status": "no_calls"}, status_code=200)

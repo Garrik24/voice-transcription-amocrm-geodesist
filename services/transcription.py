@@ -58,10 +58,28 @@ class TranscriptionService:
             Результат транскрибации с разделением по говорящим
         """
         try:
+            # Логируем размер файла
+            logger.info(f"📁 Размер аудио: {len(audio_data)} байт")
+            
+            # Определяем формат файла по magic bytes
+            suffix = ".mp3"  # По умолчанию
+            if audio_data[:4] == b'RIFF':
+                suffix = ".wav"
+            elif audio_data[:3] == b'ID3' or audio_data[:2] == b'\xff\xfb':
+                suffix = ".mp3"
+            elif audio_data[:4] == b'OggS':
+                suffix = ".ogg"
+            elif audio_data[:4] == b'fLaC':
+                suffix = ".flac"
+            
+            logger.info(f"📁 Определён формат: {suffix}")
+            
             # Сохраняем аудио во временный файл
-            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
                 f.write(audio_data)
                 temp_path = f.name
+            
+            logger.info(f"📁 Временный файл: {temp_path}")
             
             try:
                 # Настраиваем конфигурацию транскрибации
@@ -72,10 +90,12 @@ class TranscriptionService:
                     format_text=True,  # Форматирование текста
                 )
                 
-                logger.info("Начинаем транскрибацию с диаризацией...")
+                logger.info("🎙️ Начинаем транскрибацию с диаризацией...")
                 
-                # Отправляем на транскрибацию
+                # Отправляем на транскрибацию (синхронно, т.к. SDK не поддерживает async)
                 transcript = self.transcriber.transcribe(temp_path, config)
+                
+                logger.info(f"📝 Статус транскрибации: {transcript.status}")
                 
                 # Проверяем статус
                 if transcript.status == aai.TranscriptStatus.error:

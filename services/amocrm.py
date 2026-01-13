@@ -20,21 +20,22 @@ class AmoCRMService:
             "Content-Type": "application/json"
         }
     
-    async def get_recent_calls(self, hours: int = 1) -> list:
+    async def get_recent_calls(self, minutes: int = 10) -> list:
         """
         Получает список недавних звонков из AmoCRM.
         Точно как в Make.com: GET /api/v4/events с фильтрами
         
         Args:
-            hours: За сколько часов искать звонки
+            minutes: За сколько минут искать звонки
             
         Returns:
             Список событий звонков
         """
         import time
         try:
-            # Время "от" в Unix timestamp (как в Make: formatDate(addHours(now; -6); "X"))
-            from_timestamp = int(time.time()) - (hours * 3600)
+            # Время "от" в Unix timestamp
+            from_timestamp = int(time.time()) - (minutes * 60)
+            logger.info(f"🕐 Ищем звонки с timestamp: {from_timestamp} (последние {minutes} мин)")
             
             async with httpx.AsyncClient(timeout=30.0) as client:
                 # Точный URL из Make.com:
@@ -266,21 +267,33 @@ class AmoCRMService:
             Бинарные данные аудиофайла
         """
         try:
-            async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
-                # Для записей AmoCRM может потребоваться авторизация
-                response = await client.get(url, headers=self.headers)
+            logger.info(f"📥 Начинаем скачивание записи: {url[:80]}...")
+            
+            async with httpx.AsyncClient(follow_redirects=True, timeout=120.0) as client:
+                # Сначала пробуем без авторизации (многие записи публичные)
+                response = await client.get(url)
+                logger.info(f"📥 Статус ответа (без авторизации): {response.status_code}")
                 
-                # Если не требует авторизации, пробуем без неё
-                if response.status_code == 401:
-                    response = await client.get(url)
+                # Если требует авторизации, пробуем с ней
+                if response.status_code in [401, 403]:
+                    logger.info(f"📥 Пробуем с авторизацией AmoCRM...")
+                    response = await client.get(url, headers=self.headers)
+                    logger.info(f"📥 Статус ответа (с авторизацией): {response.status_code}")
                 
                 response.raise_for_status()
                 
-                logger.info(f"Скачан аудиофайл: {len(response.content)} байт")
+                content_type = response.headers.get('content-type', 'unknown')
+                content_length = len(response.content)
+                
+                logger.info(f"✅ Скачан аудиофайл: {content_length} байт, тип: {content_type}")
+                
+                if content_length < 1000:
+                    logger.warning(f"⚠️ Файл слишком маленький! Содержимое: {response.content[:200]}")
+                
                 return response.content
                 
         except Exception as e:
-            logger.error(f"Ошибка скачивания записи: {e}")
+            logger.error(f"❌ Ошибка скачивания записи: {e}")
             raise
     
     async def get_lead(self, lead_id: int) -> Optional[Dict[str, Any]]:
