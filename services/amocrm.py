@@ -23,6 +23,7 @@ class AmoCRMService:
     async def get_recent_calls(self, hours: int = 1) -> list:
         """
         Получает список недавних звонков из AmoCRM.
+        Точно как в Make.com: GET /api/v4/events с фильтрами
         
         Args:
             hours: За сколько часов искать звонки
@@ -32,18 +33,26 @@ class AmoCRMService:
         """
         import time
         try:
-            # Время "от" в Unix timestamp
+            # Время "от" в Unix timestamp (как в Make: formatDate(addHours(now; -6); "X"))
             from_timestamp = int(time.time()) - (hours * 3600)
             
             async with httpx.AsyncClient(timeout=30.0) as client:
+                # Точный URL из Make.com:
+                # /api/v4/events?filter[type][0]=outgoing_call&filter[type][1]=incoming_call&filter[created_at][from]=...
                 response = await client.get(
                     f"{self.base_url}/events",
                     headers=self.headers,
                     params={
-                        "filter[type][]": ["incoming_call", "outgoing_call"],
+                        "filter[type][0]": "outgoing_call",
+                        "filter[type][1]": "incoming_call",
                         "filter[created_at][from]": from_timestamp
                     }
                 )
+                
+                if response.status_code == 204:
+                    logger.info("Нет звонков (204 No Content)")
+                    return []
+                    
                 response.raise_for_status()
                 data = response.json()
                 
@@ -55,27 +64,114 @@ class AmoCRMService:
             logger.error(f"Ошибка получения звонков: {e}")
             return []
     
-    async def get_call_details(self, event_id: int) -> Optional[Dict[str, Any]]:
+    async def get_note_with_recording(self, entity_type: str, entity_id: int, note_id: int) -> Optional[Dict[str, Any]]:
         """
-        Получает детальную информацию о звонке.
+        Получает примечание с записью звонка.
+        Как в Make.com: GET /api/v4/{entity_type}/{entity_id}/notes/{note_id}
         
         Args:
-            event_id: ID события звонка
+            entity_type: Тип сущности (leads, contacts, companies)
+            entity_id: ID сущности
+            note_id: ID примечания
             
         Returns:
-            Данные события
+            Данные примечания с params.link
         """
         try:
+            # Преобразуем entity_type как в Make: switch(entity_type; "contact"; "contacts"; ...)
+            type_map = {
+                "lead": "leads",
+                "contact": "contacts",
+                "company": "companies"
+            }
+            api_type = type_map.get(entity_type, entity_type)
+            
+            url = f"{self.base_url}/{api_type}/{entity_id}/notes/{note_id}"
+            logger.info(f"Запрос примечания: {url}")
+            
             async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.get(
-                    f"{self.base_url}/events/{event_id}",
-                    headers=self.headers
-                )
+                response = await client.get(url, headers=self.headers)
+                
+                if response.status_code == 204:
+                    logger.warning(f"Примечание не найдено (204)")
+                    return None
+                    
                 response.raise_for_status()
-                return response.json()
+                data = response.json()
+                logger.info(f"Получено примечание: {data}")
+                return data
                 
         except Exception as e:
-            logger.error(f"Ошибка получения деталей звонка {event_id}: {e}")
+            logger.error(f"Ошибка получения примечания: {e}")
+            return None
+    
+    async def process_call_event(self, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Обрабатывает событие звонка и получает ссылку на запись.
+        Логика из Make.com:
+        1. Из события берём entity_type, entity_id, value_after[].note.id
+        2. Запрашиваем примечание
+        3. Из примечания берём params.link
+        
+        Args:
+            event: Событие звонка из API
+            
+        Returns:
+            Словарь с данными для обработки или None
+        """
+        try:
+            event_id = event.get("id")
+            event_type = event.get("type")  # incoming_call или outgoing_call
+            entity_type = event.get("entity_type")  # lead, contact, company
+            entity_id = event.get("entity_id")
+            created_by = event.get("created_by")
+            
+            logger.info(f"Обработка события #{event_id}: {event_type} для {entity_type}/{entity_id}")
+            
+            # Ищем note.id в value_after
+            value_after = event.get("value_after", [])
+            note_id = None
+            for item in value_after:
+                if isinstance(item, dict) and "note" in item:
+                    note_id = item["note"].get("id")
+                    break
+            
+            if not note_id:
+                logger.warning(f"Нет note_id в событии #{event_id}")
+                return None
+            
+            logger.info(f"Найден note_id: {note_id}")
+            
+            # Получаем примечание с записью
+            note_data = await self.get_note_with_recording(entity_type, entity_id, note_id)
+            
+            if not note_data:
+                logger.warning(f"Не удалось получить примечание {note_id}")
+                return None
+            
+            # Извлекаем ссылку на запись из params.link
+            params = note_data.get("params", {})
+            record_link = params.get("link")
+            
+            if not record_link:
+                logger.warning(f"Нет ссылки на запись в примечании {note_id}")
+                return None
+            
+            logger.info(f"✅ Найдена ссылка на запись: {record_link[:50]}...")
+            
+            return {
+                "event_id": event_id,
+                "event_type": event_type,
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "note_id": note_id,
+                "record_url": record_link,
+                "created_by": created_by,
+                "params": params
+            }
+            
+        except Exception as e:
+            logger.error(f"Ошибка обработки события: {e}")
             return None
     
     async def get_call_record_url(self, entity_id: int, entity_type: str = "leads") -> Optional[str]:

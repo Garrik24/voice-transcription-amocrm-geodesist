@@ -175,79 +175,78 @@ async def amocrm_webhook(request: Request, background_tasks: BackgroundTasks):
     """
     Webhook endpoint для AmoCRM.
     
-    НОВАЯ ЛОГИКА:
-    1. Webhook приходит при любом событии
-    2. Извлекаем lead_id из данных
-    3. Запрашиваем записи звонков через API
+    ЛОГИКА ИЗ MAKE.COM:
+    1. Webhook триггерит проверку
+    2. Запрашиваем ВСЕ звонки за последний час через API
+    3. Для каждого звонка получаем примечание с ссылкой на запись
     4. Обрабатываем звонки
     """
     try:
-        # Получаем данные от AmoCRM
+        # Получаем данные от AmoCRM (для логирования)
         form_data = await request.form()
         body = dict(form_data)
         
-        logger.info(f"📨 Получен webhook от AmoCRM")
-        
-        # Собираем все lead_id из webhook
-        lead_ids = set()
-        contact_ids = set()
-        
-        for key, value in body.items():
-            # Ищем linked_leads_id в контактах
-            if "linked_leads_id" in key and value:
-                lead_ids.add(value)
-            # Ищем element_id в примечаниях (это может быть lead_id)
-            if "element_id" in key and value:
-                lead_ids.add(value)
-            # Ищем id в leads
-            if "leads[" in key and "[id]" in key and value:
-                lead_ids.add(value)
-            # Ищем id в contacts
-            if "contacts[" in key and "[id]" in key and value:
-                contact_ids.add(value)
-        
-        logger.info(f"📋 Найдены lead_ids: {lead_ids}")
-        logger.info(f"📋 Найдены contact_ids: {contact_ids}")
+        logger.info(f"📨 Получен webhook от AmoCRM, ключей: {len(body)}")
         
         # Уведомляем в Telegram
         await telegram_service.send_message(
-            f"📨 Webhook получен!\n\nLeads: {lead_ids}\nContacts: {contact_ids}",
+            f"📨 Webhook получен!\n\nЗапускаем проверку звонков...",
             disable_notification=True
         )
         
-        # Для каждого lead_id проверяем есть ли звонки
-        for lead_id in lead_ids:
+        # ЛОГИКА ИЗ MAKE.COM:
+        # 1. Получаем ВСЕ звонки за последний час (как в Make: filter[created_at][from])
+        logger.info(f"🔍 Запрашиваем звонки за последний час...")
+        events = await amocrm_service.get_recent_calls(hours=1)
+        
+        if not events:
+            logger.info(f"📭 Нет звонков за последний час")
+            await telegram_service.send_message(
+                f"📭 Нет звонков за последний час",
+                disable_notification=True
+            )
+            return JSONResponse(content={"status": "no_calls"}, status_code=200)
+        
+        logger.info(f"📞 Найдено {len(events)} событий звонков")
+        await telegram_service.send_message(
+            f"📞 Найдено {len(events)} звонков!\n\nОбрабатываем...",
+            disable_notification=True
+        )
+        
+        # 2. Для каждого события получаем данные и обрабатываем
+        processed = 0
+        for event in events:
             try:
-                lead_id_int = int(lead_id)
-                logger.info(f"🔍 Проверяем звонки для сделки #{lead_id_int}")
+                # Получаем данные звонка (entity_type, entity_id, note_id, record_url)
+                call_data = await amocrm_service.process_call_event(event)
                 
-                # Получаем URL записи звонка через API
-                record_url = await amocrm_service.get_call_record_url(lead_id_int, "leads")
-                
-                if record_url:
-                    logger.info(f"✅ Найдена запись для сделки #{lead_id_int}")
+                if call_data and call_data.get("record_url"):
+                    logger.info(f"✅ Звонок {call_data['event_id']} готов к обработке")
+                    
                     await telegram_service.send_message(
-                        f"🎙️ Найдена запись!\n\nСделка: #{lead_id_int}\nURL: {record_url[:50]}...",
+                        f"🎙️ Обрабатываем звонок!\n\n"
+                        f"Тип: {call_data['event_type']}\n"
+                        f"Сущность: {call_data['entity_type']}/{call_data['entity_id']}\n"
+                        f"URL: {call_data['record_url'][:50]}...",
                         disable_notification=True
                     )
                     
-                    # Получаем данные сделки для ответственного
-                    lead_data = await amocrm_service.get_lead(lead_id_int)
-                    responsible_user_id = lead_data.get("responsible_user_id") if lead_data else None
-                    
-                    # Запускаем обработку в фоне
+                    # Запускаем транскрибацию в фоне
                     background_tasks.add_task(
                         process_call,
-                        lead_id=lead_id_int,
-                        call_type="outgoing_call",
-                        record_url=record_url,
-                        responsible_user_id=responsible_user_id
+                        lead_id=call_data["entity_id"],
+                        call_type=call_data["event_type"],
+                        record_url=call_data["record_url"],
+                        responsible_user_id=call_data.get("created_by")
                     )
+                    processed += 1
                 else:
-                    logger.info(f"❌ Нет записи для сделки #{lead_id_int}")
+                    logger.info(f"⏭️ Событие {event.get('id')} пропущено (нет записи)")
                     
-            except ValueError:
-                logger.warning(f"Невалидный lead_id: {lead_id}")
+            except Exception as e:
+                logger.error(f"Ошибка обработки события: {e}")
+        
+        logger.info(f"✅ Обработано {processed} из {len(events)} звонков")
         
         return JSONResponse(
             content={"status": "accepted"},
