@@ -3,11 +3,17 @@
 Получение данных о звонках и сохранение примечаний.
 """
 import httpx
+import ssl
 import logging
 from typing import Optional, Dict, Any
 from config import AMOCRM_DOMAIN, AMOCRM_ACCESS_TOKEN, MANAGERS
 
 logger = logging.getLogger(__name__)
+
+# SSL контекст с отключенной проверкой (для серверов с проблемными сертификатами)
+ssl_context = ssl.create_default_context()
+ssl_context.check_hostname = False
+ssl_context.verify_mode = ssl.CERT_NONE
 
 
 class AmoCRMService:
@@ -37,7 +43,7 @@ class AmoCRMService:
             from_timestamp = int(time.time()) - (minutes * 60)
             logger.info(f"🕐 Ищем звонки с timestamp: {from_timestamp} (последние {minutes} мин)")
             
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
                 # Точный URL из Make.com:
                 # /api/v4/events?filter[type][0]=outgoing_call&filter[type][1]=incoming_call&filter[created_at][from]=...
                 response = await client.get(
@@ -90,7 +96,7 @@ class AmoCRMService:
             url = f"{self.base_url}/{api_type}/{entity_id}/notes/{note_id}"
             logger.info(f"Запрос примечания: {url}")
             
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
                 response = await client.get(url, headers=self.headers)
                 
                 if response.status_code == 204:
@@ -187,7 +193,7 @@ class AmoCRMService:
             URL записи звонка или None
         """
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
                 # Получаем события (звонки) связанные со сделкой
                 response = await client.get(
                     f"{self.base_url}/events",
@@ -269,7 +275,7 @@ class AmoCRMService:
         try:
             logger.info(f"📥 Начинаем скачивание записи: {url[:80]}...")
             
-            async with httpx.AsyncClient(follow_redirects=True, timeout=120.0) as client:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=120.0, verify=False) as client:
                 # Сначала пробуем без авторизации (многие записи публичные)
                 response = await client.get(url)
                 logger.info(f"📥 Статус ответа (без авторизации): {response.status_code}")
