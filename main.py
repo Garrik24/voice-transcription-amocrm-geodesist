@@ -187,27 +187,56 @@ async def amocrm_webhook(request: Request, background_tasks: BackgroundTasks):
         # ВАЖНО: Логируем ВСЕ данные для отладки
         logger.info(f"📨 Получен webhook от AmoCRM")
         logger.info(f"📦 Ключи в body: {list(body.keys())}")
-        logger.info(f"📦 Полные данные: {body}")
         
-        # AmoCRM может отправлять разные типы событий
-        # Нас интересуют события о звонках
+        # Определяем тип события
+        event_types = []
+        if any("notes[add]" in k for k in body.keys()):
+            event_types.append("NOTES_ADD")
+        if any("notes[update]" in k for k in body.keys()):
+            event_types.append("NOTES_UPDATE")
+        if any("contacts[add]" in k for k in body.keys()):
+            event_types.append("CONTACTS_ADD")
+        if any("contacts[update]" in k for k in body.keys()):
+            event_types.append("CONTACTS_UPDATE")
+        if any("leads[add]" in k for k in body.keys()):
+            event_types.append("LEADS_ADD")
+        if any("leads[update]" in k for k in body.keys()):
+            event_types.append("LEADS_UPDATE")
         
-        # Отправим в Telegram для отладки
+        logger.info(f"🏷️ Тип события: {event_types}")
+        
+        # Отправим в Telegram тип события
         await telegram_service.send_message(
-            f"📨 Webhook получен!\n\nКлючи: {list(body.keys())}\n\nДанные: {str(body)[:1000]}",
+            f"📨 Webhook: {event_types}\n\n" + 
+            (f"Ключи: {list(body.keys())[:10]}..." if len(body.keys()) > 10 else f"Ключи: {list(body.keys())}"),
             disable_notification=True
         )
         
-        # Вариант 1: Событие о добавлении примечания типа "звонок"
-        # AmoCRM отправляет данные в формате notes[add][0][field_name]
+        # Ищем данные о примечаниях (notes)
         notes_data = {}
         for key, value in body.items():
-            if key.startswith("notes["):
+            if "notes[" in key:
                 notes_data[key] = value
         
-        logger.info(f"📝 Данные примечаний: {notes_data}")
+        if notes_data:
+            logger.info(f"📝 Найдены данные примечаний: {len(notes_data)} полей")
+            # Ищем note_type (10=входящий, 11=исходящий звонок)
+            note_types = [v for k, v in notes_data.items() if "note_type" in k]
+            logger.info(f"📝 Типы примечаний: {note_types}")
+            
+            # Ищем ссылку на запись
+            links = [v for k, v in notes_data.items() if "link" in k.lower()]
+            logger.info(f"🔗 Ссылки в примечаниях: {links}")
+            
+            await telegram_service.send_message(
+                f"📝 ПРИМЕЧАНИЕ!\n\nТипы: {note_types}\nСсылки: {links}",
+                disable_notification=True
+            )
+        else:
+            logger.info(f"📝 Примечаний НЕТ в этом webhook")
         
-        if notes_data or "notes[add]" in str(body):
+        # Вариант 1: Событие о добавлении примечания типа "звонок"
+        if notes_data:
             notes = body.get("notes[add]", [])
             if isinstance(notes, str):
                 import json
