@@ -1,0 +1,24 @@
+# ============================================
+# ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ДЛЯ RAILWAY
+# 
+# ⚠️ НЕ ХРАНИТЕ РЕАЛЬНЫЕ КЛЮЧИ В ЭТОМ ФАЙЛЕ!
+# Добавьте их напрямую в Railway → Variables
+# ============================================
+
+# AmoCRM
+AMOCRM_DOMAIN=your-subdomain.amocrm.ru
+AMOCRM_ACCESS_TOKEN=your_amocrm_access_token_here
+
+# AssemblyAI (для транскрибации с диаризацией)
+ASSEMBLYAI_API_KEY=your_assemblyai_api_key_here
+
+# OpenAI (для анализа разговора)
+OPENAI_API_KEY=sk-your_openai_api_key_here
+
+# Telegram (для уведомлений об ошибках)
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
+TELEGRAM_CHAT_ID=your_telegram_chat_id_here
+
+# Приложение
+DEBUG=false
+PORT=8000
