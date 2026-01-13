@@ -9,7 +9,7 @@ import logging
 import asyncio
 from contextlib import asynccontextmanager
 from typing import Optional
-from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
+from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, File, Form, UploadFile
 from fastapi.responses import JSONResponse
 import httpx
 
@@ -279,6 +279,150 @@ async def test_webhook(request: Request, background_tasks: BackgroundTasks):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/upload-audio")
+async def upload_audio(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    lead_id: int = Form(...),
+    call_type: str = Form("incoming_call"),
+    phone: str = Form(""),
+    manager_name: str = Form("Менеджер")
+):
+    """
+    Загрузка аудиофайла вручную для транскрибации.
+    
+    Используй когда SSL сертификат не работает:
+    1. Скачай запись вручную
+    2. Загрузи через этот endpoint
+    3. Результат появится в AmoCRM и Telegram
+    
+    Пример curl:
+    curl -X POST https://voice-transcription-production.up.railway.app/upload-audio \
+      -F "file=@recording.mp3" \
+      -F "lead_id=12345" \
+      -F "call_type=incoming_call" \
+      -F "phone=+79001234567"
+    """
+    from datetime import datetime
+    from config import AMOCRM_DOMAIN
+    
+    try:
+        # Читаем файл
+        audio_data = await file.read()
+        logger.info(f"📤 Загружен файл: {file.filename}, размер: {len(audio_data)} байт")
+        
+        if len(audio_data) < 10000:
+            raise HTTPException(status_code=400, detail="Файл слишком маленький")
+        
+        # Запускаем обработку напрямую (без скачивания)
+        background_tasks.add_task(
+            process_uploaded_audio,
+            audio_data=audio_data,
+            lead_id=lead_id,
+            call_type=call_type,
+            phone=phone,
+            manager_name=manager_name
+        )
+        
+        return {
+            "status": "processing",
+            "lead_id": lead_id,
+            "file_size": len(audio_data),
+            "message": "Файл принят в обработку. Результат появится в Telegram и AmoCRM."
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ошибка загрузки: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def process_uploaded_audio(
+    audio_data: bytes,
+    lead_id: int,
+    call_type: str,
+    phone: str,
+    manager_name: str
+):
+    """Обработка загруженного аудио (без скачивания)"""
+    from datetime import datetime
+    from config import AMOCRM_DOMAIN
+    
+    try:
+        logger.info(f"📞 Обработка загруженного аудио для сделки #{lead_id}")
+        
+        # 1. Транскрибируем
+        logger.info("🎙️ Транскрибация...")
+        transcription = await transcription_service.transcribe_audio(audio_data)
+        
+        if not transcription.full_text or len(transcription.full_text) < 50:
+            logger.warning("⚠️ Транскрибация слишком короткая")
+            await telegram_service.send_error(
+                error_type="Короткая транскрибация",
+                error_message=f"Только {len(transcription.full_text or '')} символов",
+                lead_id=lead_id
+            )
+            return
+        
+        # 2. Определяем роли
+        roles = transcription_service.identify_roles(transcription.speakers)
+        formatted_transcript = transcription_service.format_with_roles(
+            transcription.speakers, 
+            roles
+        )
+        logger.info(f"📝 Транскрибация: {len(formatted_transcript)} символов")
+        
+        # 3. Анализируем через GPT
+        logger.info("🤖 Анализ через GPT...")
+        call_type_simple = "outgoing" if "outgoing" in call_type else "incoming"
+        analysis = await analysis_service.analyze_call(
+            formatted_transcript,
+            call_type=call_type_simple,
+            manager_name=manager_name
+        )
+        
+        # 4. Формируем примечание
+        note_text = analysis_service.format_note(
+            analysis,
+            call_type=call_type_simple,
+            duration_seconds=transcription.duration_seconds,
+            manager_name=manager_name
+        )
+        
+        # 5. Сохраняем в AmoCRM
+        logger.info(f"💾 Сохраняем в сделку #{lead_id}...")
+        await amocrm_service.add_note_to_lead(lead_id, note_text)
+        
+        # 6. Отправляем в Telegram
+        call_datetime = datetime.now().strftime("%d.%m.%Y %H:%M")
+        amocrm_url = f"https://{AMOCRM_DOMAIN}/leads/detail/{lead_id}"
+        
+        await telegram_service.send_call_analysis(
+            call_datetime=call_datetime,
+            call_type=call_type_simple,
+            phone=phone or "Не указан",
+            manager_name=analysis.manager_name,
+            client_name=analysis.client_name,
+            summary=analysis.summary,
+            manager_rating=analysis.manager_rating,
+            what_good=analysis.what_good,
+            what_improve=analysis.what_improve,
+            amocrm_url=amocrm_url,
+            record_url=""
+        )
+        
+        logger.info(f"✅ Загруженный файл для сделки #{lead_id} обработан!")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка обработки: {e}")
+        await telegram_service.send_error(
+            error_type="Ошибка обработки загруженного файла",
+            error_message=str(e),
+            lead_id=lead_id
+        )
 
 
 if __name__ == "__main__":
