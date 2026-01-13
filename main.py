@@ -26,6 +26,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Кэш обработанных звонков, чтобы избежать дублей и петель
+# В продакшене лучше использовать Redis, но для начала хватит и Set в памяти
+PROCESSED_CALLS = set()
+PROCESSED_LOCK = asyncio.Lock()
+
+
+async def is_already_processed(record_url: str) -> bool:
+    """Проверяет, обрабатывался ли уже этот звонок по URL записи"""
+    async with PROCESSED_LOCK:
+        if record_url in PROCESSED_CALLS:
+            return True
+        # Ограничиваем размер кэша (храним последние 1000 записей)
+        if len(PROCESSED_CALLS) > 1000:
+            PROCESSED_CALLS.clear()
+        PROCESSED_CALLS.add(record_url)
+        return False
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -75,6 +92,11 @@ async def process_call(
     from config import AMOCRM_DOMAIN
     
     try:
+        # 0. Проверяем дубликаты
+        if await is_already_processed(record_url):
+            logger.info(f"⏭️ Звонок {record_url[:50]}... уже обрабатывается или обработан, скипаем")
+            return
+
         # ВАЖНО: если звонок привязан к контакту, находим АКТИВНУЮ сделку или создаём новую!
         lead_id = entity_id
         target_entity_type = entity_type
@@ -211,37 +233,51 @@ async def health():
 async def amocrm_webhook(request: Request, background_tasks: BackgroundTasks):
     """
     Webhook endpoint для AmoCRM.
-    
-    ЛОГИКА ИЗ MAKE.COM:
-    1. Webhook триггерит проверку
-    2. Запрашиваем ВСЕ звонки за последний час через API
-    3. Для каждого звонка получаем примечание с ссылкой на запись
-    4. Обрабатываем звонки
     """
     try:
-        # Получаем данные от AmoCRM
+        # 1. Получаем данные от AmoCRM
         form_data = await request.form()
         body = dict(form_data)
-        logger.info(f"📨 Webhook от AmoCRM, ключей: {len(body)}")
+        logger.info(f"📨 Webhook от AmoCRM: {list(body.keys())[:5]}...")
         
-        # Получаем звонки за последние 10 минут
-        events = await amocrm_service.get_recent_calls(minutes=10)
+        # 2. Пытаемся извлечь ID сущности из вебхука (любого типа)
+        target_entity_id = None
+        target_entity_type = "leads"
+        
+        # Перебираем ключи, ищем [id] или [element_id]
+        for key, value in body.items():
+            if "[id]" in key or "[element_id]" in key:
+                try:
+                    target_entity_id = int(value)
+                    # Определяем тип сущности по ключу
+                    if "contacts" in key:
+                        target_entity_type = "contacts"
+                    elif "leads" in key:
+                        target_entity_type = "leads"
+                    break
+                except:
+                    continue
+        
+        if not target_entity_id:
+            logger.warning("⚠️ Не удалось найти ID сущности в вебхуке")
+            # На всякий случай проверяем недавние звонки (ограничим до 5 минут)
+            events = await amocrm_service.get_recent_calls(minutes=5)
+        else:
+            logger.info(f"🔍 Webhook для {target_entity_type} #{target_entity_id}. Ищем звонки...")
+            # Запрашиваем звонки ТОЛЬКО для этой сущности
+            events = await amocrm_service.get_call_events_for_entity(target_entity_id, target_entity_type)
         
         if not events:
-            logger.info(f"📭 Нет звонков")
+            logger.info(f"📭 Звонков не обнаружено")
             return JSONResponse(content={"status": "no_calls"}, status_code=200)
         
-        logger.info(f"📞 Найдено {len(events)} звонков")
-        
-        # Обрабатываем каждый звонок
+        # 3. Обрабатываем каждый звонок
         processed = 0
         for event in events:
             try:
                 call_data = await amocrm_service.process_call_event(event)
                 
                 if call_data and call_data.get("record_url"):
-                    logger.info(f"✅ Звонок {call_data['event_id']} → обработка")
-                    
                     # Запускаем транскрибацию в фоне
                     background_tasks.add_task(
                         process_call,
@@ -255,18 +291,12 @@ async def amocrm_webhook(request: Request, background_tasks: BackgroundTasks):
                     processed += 1
                     
             except Exception as e:
-                logger.error(f"Ошибка события: {e}")
+                logger.error(f" Ошибка обработки события звонка: {e}")
         
-        logger.info(f"✅ Запущено {processed} из {len(events)}")
-        return JSONResponse(content={"status": "accepted"}, status_code=200)
+        return JSONResponse(content={"status": "accepted", "processed": processed}, status_code=200)
         
     except Exception as e:
         logger.error(f"❌ Webhook ошибка: {e}")
-        # Отправляем ТОЛЬКО критические ошибки в Telegram
-        await telegram_service.send_error(
-            error_type="Webhook Error",
-            error_message=str(e)
-        )
         return JSONResponse(content={"status": "error"}, status_code=200)
 
 
