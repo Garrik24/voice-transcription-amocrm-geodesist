@@ -20,6 +20,64 @@ class AmoCRMService:
             "Content-Type": "application/json"
         }
     
+    async def get_recent_calls(self, hours: int = 1) -> list:
+        """
+        Получает список недавних звонков из AmoCRM.
+        
+        Args:
+            hours: За сколько часов искать звонки
+            
+        Returns:
+            Список событий звонков
+        """
+        import time
+        try:
+            # Время "от" в Unix timestamp
+            from_timestamp = int(time.time()) - (hours * 3600)
+            
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(
+                    f"{self.base_url}/events",
+                    headers=self.headers,
+                    params={
+                        "filter[type][]": ["incoming_call", "outgoing_call"],
+                        "filter[created_at][from]": from_timestamp
+                    }
+                )
+                response.raise_for_status()
+                data = response.json()
+                
+                events = data.get("_embedded", {}).get("events", [])
+                logger.info(f"Найдено {len(events)} звонков за последние {hours} час(ов)")
+                return events
+                
+        except Exception as e:
+            logger.error(f"Ошибка получения звонков: {e}")
+            return []
+    
+    async def get_call_details(self, event_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Получает детальную информацию о звонке.
+        
+        Args:
+            event_id: ID события звонка
+            
+        Returns:
+            Данные события
+        """
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(
+                    f"{self.base_url}/events/{event_id}",
+                    headers=self.headers
+                )
+                response.raise_for_status()
+                return response.json()
+                
+        except Exception as e:
+            logger.error(f"Ошибка получения деталей звонка {event_id}: {e}")
+            return None
+    
     async def get_call_record_url(self, entity_id: int, entity_type: str = "leads") -> Optional[str]:
         """
         Получает URL записи звонка из события в AmoCRM.
@@ -32,7 +90,7 @@ class AmoCRMService:
             URL записи звонка или None
         """
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 # Получаем события (звонки) связанные со сделкой
                 response = await client.get(
                     f"{self.base_url}/events",
@@ -52,11 +110,13 @@ class AmoCRMService:
                 
                 # Берём последний звонок
                 latest_event = data["_embedded"]["events"][0]
+                logger.info(f"Найден звонок: {latest_event.get('id')}, тип: {latest_event.get('type')}")
                 
                 # Извлекаем URL записи из value_after
                 value_after = latest_event.get("value_after", [])
                 for item in value_after:
                     if item.get("link"):
+                        logger.info(f"Найдена ссылка на запись: {item.get('link')[:50]}...")
                         return item["link"]
                 
                 logger.warning(f"Нет ссылки на запись в событии: {latest_event}")

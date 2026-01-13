@@ -175,103 +175,79 @@ async def amocrm_webhook(request: Request, background_tasks: BackgroundTasks):
     """
     Webhook endpoint для AmoCRM.
     
-    AmoCRM отправляет сюда события о звонках.
-    Обработка выполняется в фоновом режиме.
+    НОВАЯ ЛОГИКА:
+    1. Webhook приходит при любом событии
+    2. Извлекаем lead_id из данных
+    3. Запрашиваем записи звонков через API
+    4. Обрабатываем звонки
     """
     try:
         # Получаем данные от AmoCRM
-        # AmoCRM отправляет form data, не JSON
         form_data = await request.form()
         body = dict(form_data)
         
-        # ВАЖНО: Логируем ВСЕ данные для отладки
         logger.info(f"📨 Получен webhook от AmoCRM")
-        logger.info(f"📦 Ключи в body: {list(body.keys())}")
         
-        # Определяем тип события
-        event_types = []
-        if any("notes[add]" in k for k in body.keys()):
-            event_types.append("NOTES_ADD")
-        if any("notes[update]" in k for k in body.keys()):
-            event_types.append("NOTES_UPDATE")
-        if any("contacts[add]" in k for k in body.keys()):
-            event_types.append("CONTACTS_ADD")
-        if any("contacts[update]" in k for k in body.keys()):
-            event_types.append("CONTACTS_UPDATE")
-        if any("leads[add]" in k for k in body.keys()):
-            event_types.append("LEADS_ADD")
-        if any("leads[update]" in k for k in body.keys()):
-            event_types.append("LEADS_UPDATE")
+        # Собираем все lead_id из webhook
+        lead_ids = set()
+        contact_ids = set()
         
-        logger.info(f"🏷️ Тип события: {event_types}")
+        for key, value in body.items():
+            # Ищем linked_leads_id в контактах
+            if "linked_leads_id" in key and value:
+                lead_ids.add(value)
+            # Ищем element_id в примечаниях (это может быть lead_id)
+            if "element_id" in key and value:
+                lead_ids.add(value)
+            # Ищем id в leads
+            if "leads[" in key and "[id]" in key and value:
+                lead_ids.add(value)
+            # Ищем id в contacts
+            if "contacts[" in key and "[id]" in key and value:
+                contact_ids.add(value)
         
-        # Отправим в Telegram тип события
+        logger.info(f"📋 Найдены lead_ids: {lead_ids}")
+        logger.info(f"📋 Найдены contact_ids: {contact_ids}")
+        
+        # Уведомляем в Telegram
         await telegram_service.send_message(
-            f"📨 Webhook: {event_types}\n\n" + 
-            (f"Ключи: {list(body.keys())[:10]}..." if len(body.keys()) > 10 else f"Ключи: {list(body.keys())}"),
+            f"📨 Webhook получен!\n\nLeads: {lead_ids}\nContacts: {contact_ids}",
             disable_notification=True
         )
         
-        # Ищем данные о примечаниях (notes)
-        notes_data = {}
-        for key, value in body.items():
-            if "notes[" in key:
-                notes_data[key] = value
-        
-        if notes_data:
-            logger.info(f"📝 Найдены данные примечаний: {len(notes_data)} полей")
-            # Ищем note_type (10=входящий, 11=исходящий звонок)
-            note_types = [v for k, v in notes_data.items() if "note_type" in k]
-            logger.info(f"📝 Типы примечаний: {note_types}")
-            
-            # Ищем ссылку на запись
-            links = [v for k, v in notes_data.items() if "link" in k.lower()]
-            logger.info(f"🔗 Ссылки в примечаниях: {links}")
-            
-            await telegram_service.send_message(
-                f"📝 ПРИМЕЧАНИЕ!\n\nТипы: {note_types}\nСсылки: {links}",
-                disable_notification=True
-            )
-        else:
-            logger.info(f"📝 Примечаний НЕТ в этом webhook")
-        
-        # Вариант 1: Событие о добавлении примечания типа "звонок"
-        if notes_data:
-            notes = body.get("notes[add]", [])
-            if isinstance(notes, str):
-                import json
-                try:
-                    notes = json.loads(notes)
-                except:
-                    notes = []
-            
-            for note in notes if isinstance(notes, list) else [notes]:
-                note_type = note.get("note_type")
+        # Для каждого lead_id проверяем есть ли звонки
+        for lead_id in lead_ids:
+            try:
+                lead_id_int = int(lead_id)
+                logger.info(f"🔍 Проверяем звонки для сделки #{lead_id_int}")
                 
-                # Типы примечаний для звонков: 10 (входящий), 11 (исходящий)
-                if note_type in ["10", "11", 10, 11]:
-                    lead_id = note.get("element_id")
-                    params = note.get("params", {})
-                    record_url = params.get("link")
+                # Получаем URL записи звонка через API
+                record_url = await amocrm_service.get_call_record_url(lead_id_int, "leads")
+                
+                if record_url:
+                    logger.info(f"✅ Найдена запись для сделки #{lead_id_int}")
+                    await telegram_service.send_message(
+                        f"🎙️ Найдена запись!\n\nСделка: #{lead_id_int}\nURL: {record_url[:50]}...",
+                        disable_notification=True
+                    )
                     
-                    if lead_id and record_url:
-                        # Определяем тип звонка
-                        call_type = "incoming_call" if note_type in ["10", 10] else "outgoing_call"
-                        responsible_user_id = note.get("responsible_user_id")
-                        
-                        # Запускаем обработку в фоне
-                        background_tasks.add_task(
-                            process_call,
-                            lead_id=int(lead_id),
-                            call_type=call_type,
-                            record_url=record_url,
-                            responsible_user_id=int(responsible_user_id) if responsible_user_id else None
-                        )
-                        
-                        logger.info(f"📌 Задача добавлена: сделка #{lead_id}")
-        
-        # Вариант 2: Событие через кастомный webhook
-        # Добавь свою логику если нужно
+                    # Получаем данные сделки для ответственного
+                    lead_data = await amocrm_service.get_lead(lead_id_int)
+                    responsible_user_id = lead_data.get("responsible_user_id") if lead_data else None
+                    
+                    # Запускаем обработку в фоне
+                    background_tasks.add_task(
+                        process_call,
+                        lead_id=lead_id_int,
+                        call_type="outgoing_call",
+                        record_url=record_url,
+                        responsible_user_id=responsible_user_id
+                    )
+                else:
+                    logger.info(f"❌ Нет записи для сделки #{lead_id_int}")
+                    
+            except ValueError:
+                logger.warning(f"Невалидный lead_id: {lead_id}")
         
         return JSONResponse(
             content={"status": "accepted"},
