@@ -293,6 +293,21 @@ async def amocrm_webhook(request: Request, background_tasks: BackgroundTasks):
                 call_data = await amocrm_service.process_call_event(event)
                 
                 if call_data and call_data.get("record_url"):
+                    # ВАЖНО: нормализуем entity_type из события
+                    # AmoCRM возвращает "contact", "lead", "company" (единственное число)
+                    # Но нам нужно "contacts", "leads", "companies" для проверок
+                    raw_entity_type = call_data.get("entity_type", "lead")
+                    normalized_entity_type = {
+                        "contact": "contacts",
+                        "contacts": "contacts",
+                        "lead": "leads",
+                        "leads": "leads",
+                        "company": "companies",
+                        "companies": "companies"
+                    }.get(raw_entity_type.lower(), "leads")
+                    
+                    logger.info(f"📋 Звонок для {normalized_entity_type}/{call_data['entity_id']}, исходный тип: {raw_entity_type}")
+                    
                     # Запускаем транскрибацию в фоне
                     background_tasks.add_task(
                         process_call,
@@ -301,7 +316,7 @@ async def amocrm_webhook(request: Request, background_tasks: BackgroundTasks):
                         record_url=call_data["record_url"],
                         responsible_user_id=call_data.get("created_by"),
                         phone=call_data.get("phone", ""),
-                        entity_type=call_data.get("entity_type", "leads")
+                        entity_type=normalized_entity_type
                     )
                     processed += 1
                     
