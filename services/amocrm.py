@@ -590,12 +590,23 @@ class AmoCRMService:
         contact = await self.get_contact(contact_id)
         contact_name = contact.get("name", "") if contact else ""
         
-        return await self.create_lead_for_contact(
+        new_lead_id = await self.create_lead_for_contact(
             contact_id=contact_id,
             contact_name=contact_name,
             phone=phone,
             responsible_user_id=responsible_user_id
         )
+        
+        if not new_lead_id:
+            logger.error(f"❌ Не удалось создать сделку для контакта #{contact_id}")
+            return None
+        
+        if new_lead_id == contact_id:
+            logger.error(f"⚠️ ВНИМАНИЕ: create_lead_for_contact вернул ID контакта {contact_id} вместо ID сделки!")
+            return None
+        
+        logger.info(f"✅ Создана новая сделка #{new_lead_id} для контакта #{contact_id}")
+        return new_lead_id
 
 
 # Синглтон для использования во всём приложении
