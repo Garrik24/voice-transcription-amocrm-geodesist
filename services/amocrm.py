@@ -265,6 +265,7 @@ class AmoCRMService:
     async def download_call_recording(self, url: str) -> bytes:
         """
         Скачивает аудиофайл записи звонка.
+        Обходит проверку SSL для серверов с невалидными сертификатами.
         
         Args:
             url: URL записи звонка
@@ -272,34 +273,38 @@ class AmoCRMService:
         Returns:
             Бинарные данные аудиофайла
         """
+        import ssl
+        import httpx
+        
         try:
-            logger.info(f"📥 Начинаем скачивание записи: {url[:80]}...")
+            logger.info(f"📥 Скачиваем запись: {url[:80]}...")
             
-            async with httpx.AsyncClient(follow_redirects=True, timeout=120.0, verify=False) as client:
-                # Сначала пробуем без авторизации (многие записи публичные)
+            # Создаём SSL контекст, который полностью игнорирует проверку сертификатов
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.check_hostname = False
+            ssl_ctx.verify_mode = ssl.CERT_NONE
+            
+            async with httpx.AsyncClient(
+                follow_redirects=True, 
+                timeout=120.0, 
+                verify=ssl_ctx  # Используем кастомный SSL контекст
+            ) as client:
+                # Сначала пробуем без авторизации
                 response = await client.get(url)
-                logger.info(f"📥 Статус ответа (без авторизации): {response.status_code}")
                 
                 # Если требует авторизации, пробуем с ней
                 if response.status_code in [401, 403]:
-                    logger.info(f"📥 Пробуем с авторизацией AmoCRM...")
                     response = await client.get(url, headers=self.headers)
-                    logger.info(f"📥 Статус ответа (с авторизацией): {response.status_code}")
                 
                 response.raise_for_status()
                 
-                content_type = response.headers.get('content-type', 'unknown')
                 content_length = len(response.content)
-                
-                logger.info(f"✅ Скачан аудиофайл: {content_length} байт, тип: {content_type}")
-                
-                if content_length < 1000:
-                    logger.warning(f"⚠️ Файл слишком маленький! Содержимое: {response.content[:200]}")
+                logger.info(f"✅ Скачано: {content_length} байт")
                 
                 return response.content
                 
         except Exception as e:
-            logger.error(f"❌ Ошибка скачивания записи: {e}")
+            logger.error(f"❌ Ошибка скачивания: {e}")
             raise
     
     async def get_lead(self, lead_id: int) -> Optional[Dict[str, Any]]:
