@@ -75,22 +75,33 @@ async def process_call(
     from config import AMOCRM_DOMAIN
     
     try:
-        # ВАЖНО: если звонок привязан к контакту, находим его сделку!
+        # ВАЖНО: если звонок привязан к контакту, находим АКТИВНУЮ сделку или создаём новую!
         lead_id = entity_id
         target_entity_type = entity_type
         
         if entity_type == "contact" or entity_type == "contacts":
-            logger.info(f"🔍 Звонок привязан к контакту #{entity_id}, ищем сделку...")
-            linked_lead = await amocrm_service.get_linked_lead(entity_id)
+            logger.info(f"🔍 Звонок привязан к контакту #{entity_id}, ищем активную сделку...")
             
-            if linked_lead:
-                lead_id = linked_lead
+            # Ищем активную сделку или создаём новую
+            found_lead = await amocrm_service.get_or_create_lead_for_contact(
+                contact_id=entity_id,
+                phone=phone,
+                responsible_user_id=responsible_user_id
+            )
+            
+            if found_lead:
+                lead_id = found_lead
                 target_entity_type = "leads"
-                logger.info(f"✅ Найдена сделка #{lead_id}")
+                logger.info(f"✅ Используем сделку #{lead_id}")
             else:
-                # Если нет привязанной сделки, добавляем к контакту
-                logger.warning(f"⚠️ У контакта #{entity_id} нет сделки, добавляем к контакту")
-                target_entity_type = "contacts"
+                # Крайний случай - не удалось создать сделку
+                logger.error(f"❌ Не удалось найти/создать сделку для контакта #{entity_id}")
+                await telegram_service.send_error(
+                    error_type="Ошибка сделки",
+                    error_message=f"Не удалось создать сделку для контакта {entity_id}",
+                    lead_id=entity_id
+                )
+                return
         
         logger.info(f"📞 Обработка звонка → {target_entity_type}/{lead_id}, тип: {call_type}")
         

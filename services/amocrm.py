@@ -446,43 +446,187 @@ class AmoCRMService:
         
         return f"Менеджер #{user_id}"
     
-    async def get_linked_lead(self, contact_id: int) -> Optional[int]:
+    async def get_active_lead_for_contact(self, contact_id: int) -> Optional[int]:
         """
-        Получает ID сделки, привязанной к контакту.
+        Получает ID АКТИВНОЙ сделки, привязанной к контакту.
+        
+        Закрытые сделки (status_id = 142 - успех, 143 - провал) игнорируются!
         
         Args:
             contact_id: ID контакта
             
         Returns:
-            ID сделки или None
+            ID активной сделки или None
         """
+        # Статусы "закрытых" сделок (не добавляем примечания туда)
+        CLOSED_STATUSES = {
+            142,  # Успешно реализовано
+            143,  # Закрыто и не реализовано
+        }
+        
         try:
             async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+                # 1. Получаем связи контакта
                 response = await client.get(
                     f"{self.base_url}/contacts/{contact_id}/links",
                     headers=self.headers
                 )
                 
                 if response.status_code == 204:
+                    logger.info(f"У контакта {contact_id} нет связей")
                     return None
                     
                 response.raise_for_status()
                 data = response.json()
                 
-                # Ищем связь с leads
+                # 2. Собираем ID всех связанных сделок
                 links = data.get("_embedded", {}).get("links", [])
-                for link in links:
-                    if link.get("to_entity_type") == "leads":
-                        lead_id = link.get("to_entity_id")
-                        logger.info(f"🔗 Контакт {contact_id} → Сделка {lead_id}")
-                        return lead_id
+                lead_ids = [
+                    link.get("to_entity_id") 
+                    for link in links 
+                    if link.get("to_entity_type") == "leads"
+                ]
                 
-                logger.warning(f"У контакта {contact_id} нет привязанной сделки")
+                if not lead_ids:
+                    logger.info(f"У контакта {contact_id} нет сделок")
+                    return None
+                
+                logger.info(f"🔍 Контакт {contact_id} имеет {len(lead_ids)} сделок: {lead_ids}")
+                
+                # 3. Проверяем статус каждой сделки
+                for lead_id in lead_ids:
+                    try:
+                        lead_response = await client.get(
+                            f"{self.base_url}/leads/{lead_id}",
+                            headers=self.headers
+                        )
+                        
+                        if lead_response.status_code == 200:
+                            lead_data = lead_response.json()
+                            status_id = lead_data.get("status_id")
+                            lead_name = lead_data.get("name", "")
+                            
+                            logger.info(f"  Сделка #{lead_id} '{lead_name}': статус {status_id}")
+                            
+                            # Если сделка НЕ закрыта - используем её
+                            if status_id not in CLOSED_STATUSES:
+                                logger.info(f"✅ Найдена активная сделка #{lead_id}")
+                                return lead_id
+                            else:
+                                logger.info(f"  ⏭️ Сделка #{lead_id} закрыта, пропускаем")
+                                
+                    except Exception as e:
+                        logger.warning(f"Не удалось проверить сделку {lead_id}: {e}")
+                
+                logger.info(f"❌ Все сделки контакта {contact_id} закрыты")
                 return None
                 
         except Exception as e:
-            logger.error(f"Ошибка получения связей контакта {contact_id}: {e}")
+            logger.error(f"Ошибка получения активной сделки для контакта {contact_id}: {e}")
             return None
+    
+    async def create_lead_for_contact(
+        self, 
+        contact_id: int, 
+        contact_name: str = "",
+        phone: str = "",
+        responsible_user_id: Optional[int] = None
+    ) -> Optional[int]:
+        """
+        Создаёт новую сделку и привязывает к контакту.
+        
+        Args:
+            contact_id: ID контакта
+            contact_name: Имя контакта (для названия сделки)
+            phone: Телефон (для названия сделки)
+            responsible_user_id: Ответственный менеджер
+            
+        Returns:
+            ID созданной сделки или None
+        """
+        try:
+            # Формируем название сделки
+            lead_name = f"Входящий звонок: {contact_name or phone or contact_id}"
+            
+            # Данные для создания сделки
+            lead_data = [{
+                "name": lead_name,
+                "_embedded": {
+                    "contacts": [{"id": contact_id}]
+                }
+            }]
+            
+            # Добавляем ответственного если есть
+            if responsible_user_id:
+                lead_data[0]["responsible_user_id"] = responsible_user_id
+            
+            async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+                response = await client.post(
+                    f"{self.base_url}/leads",
+                    headers=self.headers,
+                    json=lead_data
+                )
+                
+                if response.status_code == 400:
+                    logger.error(f"Ошибка создания сделки: {response.text}")
+                    return None
+                
+                response.raise_for_status()
+                data = response.json()
+                
+                # Получаем ID созданной сделки
+                leads = data.get("_embedded", {}).get("leads", [])
+                if leads:
+                    lead_id = leads[0].get("id")
+                    logger.info(f"✅ Создана сделка #{lead_id} для контакта #{contact_id}")
+                    return lead_id
+                
+                return None
+                
+        except Exception as e:
+            logger.error(f"Ошибка создания сделки для контакта {contact_id}: {e}")
+            return None
+    
+    async def get_or_create_lead_for_contact(
+        self, 
+        contact_id: int,
+        phone: str = "",
+        responsible_user_id: Optional[int] = None
+    ) -> Optional[int]:
+        """
+        Получает АКТИВНУЮ сделку контакта или создаёт новую.
+        
+        Логика:
+        - Если есть активная (не закрытая) сделка → возвращаем её
+        - Если все сделки закрыты или нет сделок → создаём новую
+        
+        Args:
+            contact_id: ID контакта
+            phone: Телефон для названия сделки
+            responsible_user_id: Ответственный менеджер
+            
+        Returns:
+            ID сделки (существующей активной или новой)
+        """
+        # Ищем АКТИВНУЮ сделку (не закрытую)
+        lead_id = await self.get_active_lead_for_contact(contact_id)
+        
+        if lead_id:
+            logger.info(f"✅ Используем активную сделку #{lead_id}")
+            return lead_id
+        
+        # Нет активной сделки - создаём новую
+        logger.info(f"📝 Создаём новую сделку для контакта #{contact_id}...")
+        
+        contact = await self.get_contact(contact_id)
+        contact_name = contact.get("name", "") if contact else ""
+        
+        return await self.create_lead_for_contact(
+            contact_id=contact_id,
+            contact_name=contact_name,
+            phone=phone,
+            responsible_user_id=responsible_user_id
+        )
 
 
 # Синглтон для использования во всём приложении
