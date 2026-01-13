@@ -133,7 +133,11 @@ async def process_call(
                 if user:
                     manager_name = user.get("name", manager_name)
         
-        # 2. Скачиваем запись
+        # 2. Скачиваем запись (если не загружена вручную)
+        if record_url.startswith("uploaded://"):
+            logger.error("❌ process_call вызван с uploaded:// URL - используйте process_uploaded_audio")
+            return
+        
         logger.info("📥 Скачиваем запись...")
         audio_data = await amocrm_service.download_call_recording(record_url)
         
@@ -299,49 +303,6 @@ async def amocrm_webhook(request: Request, background_tasks: BackgroundTasks):
         return JSONResponse(content={"status": "error"}, status_code=200)
 
 
-@app.post("/webhook/test")
-async def test_webhook(request: Request, background_tasks: BackgroundTasks):
-    """
-    Тестовый endpoint для проверки обработки.
-    
-    Пример запроса:
-    POST /webhook/test
-    {
-        "lead_id": 12345,
-        "record_url": "https://...",
-        "call_type": "outgoing_call",
-        "responsible_user_id": 123
-    }
-    """
-    try:
-        data = await request.json()
-        
-        lead_id = data.get("lead_id")
-        record_url = data.get("record_url")
-        call_type = data.get("call_type", "outgoing_call")
-        responsible_user_id = data.get("responsible_user_id")
-        
-        if not lead_id or not record_url:
-            raise HTTPException(
-                status_code=400,
-                detail="Требуются параметры: lead_id, record_url"
-            )
-        
-        # Запускаем обработку в фоне
-        background_tasks.add_task(
-            process_call,
-            lead_id=int(lead_id),
-            call_type=call_type,
-            record_url=record_url,
-            responsible_user_id=int(responsible_user_id) if responsible_user_id else None
-        )
-        
-        return {"status": "processing", "lead_id": lead_id}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/upload-audio")
@@ -417,17 +378,13 @@ async def process_uploaded_audio(
     try:
         logger.info(f"📞 Обработка загруженного аудио для сделки #{lead_id}")
         
+        # Используем общую логику обработки (без скачивания)
         # 1. Транскрибируем
         logger.info("🎙️ Транскрибация...")
         transcription = await transcription_service.transcribe_audio(audio_data)
         
         if not transcription.full_text or len(transcription.full_text) < 50:
             logger.warning("⚠️ Транскрибация слишком короткая")
-            await telegram_service.send_error(
-                error_type="Короткая транскрибация",
-                error_message=f"Только {len(transcription.full_text or '')} символов",
-                lead_id=lead_id
-            )
             return
         
         # 2. Определяем роли
@@ -455,18 +412,19 @@ async def process_uploaded_audio(
             manager_name=manager_name
         )
         
-        # 5. Сохраняем в AmoCRM
-        logger.info(f"💾 Сохраняем в сделку #{lead_id}...")
-        await amocrm_service.add_note_to_lead(lead_id, note_text)
+        # 5. Сохраняем в AmoCRM (в СДЕЛКУ!)
+        logger.info(f"💾 Сохраняем примечание в leads/{lead_id}...")
+        await amocrm_service.add_note_to_entity(lead_id, note_text, "leads")
+        logger.info(f"✅ Примечание успешно добавлено к leads/{lead_id}")
         
-        # 6. Отправляем в Telegram
+        # 6. Отправляем красивый анализ в Telegram
         call_datetime = datetime.now().strftime("%d.%m.%Y %H:%M")
         amocrm_url = f"https://{AMOCRM_DOMAIN}/leads/detail/{lead_id}"
         
         await telegram_service.send_call_analysis(
             call_datetime=call_datetime,
             call_type=call_type_simple,
-            phone=phone or "Не указан",
+            phone=phone or "Не определён",
             manager_name=analysis.manager_name,
             client_name=analysis.client_name,
             summary=analysis.summary,
@@ -480,8 +438,7 @@ async def process_uploaded_audio(
         logger.info(f"✅ Загруженный файл для сделки #{lead_id} обработан!")
         
     except Exception as e:
-        logger.error(f"❌ Ошибка обработки: {e}")
-        # НЕ отправляем ошибки в Telegram - только логируем (избегаем спама)
+        logger.error(f"❌ Ошибка обработки загруженного файла: {e}")
 
 
 if __name__ == "__main__":

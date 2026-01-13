@@ -64,7 +64,7 @@ class AmoCRMService:
                 data = response.json()
                 
                 events = data.get("_embedded", {}).get("events", [])
-                logger.info(f"Найдено {len(events)} звонков за последние {hours} час(ов)")
+                logger.info(f"Найдено {len(events)} звонков за последние {minutes} минут")
                 return events
                 
         except Exception as e:
@@ -185,86 +185,47 @@ class AmoCRMService:
             logger.error(f"Ошибка обработки события: {e}")
             return None
     
-    async def get_call_record_url(self, entity_id: int, entity_type: str = "leads") -> Optional[str]:
+    async def get_call_events_for_entity(self, entity_id: int, entity_type: str) -> list:
         """
-        Получает URL записи звонка из события в AmoCRM.
+        Получает события звонков для конкретной сущности (контакта или сделки).
         
         Args:
-            entity_id: ID сущности (сделки)
-            entity_type: Тип сущности (leads, contacts, etc.)
+            entity_id: ID сущности
+            entity_type: Тип сущности (contacts, leads)
             
         Returns:
-            URL записи звонка или None
+            Список событий звонков
         """
         try:
+            # Преобразуем entity_type для API
+            api_entity_type = "contact" if entity_type == "contacts" else "lead"
+            
             async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
-                # Получаем события (звонки) связанные со сделкой
                 response = await client.get(
                     f"{self.base_url}/events",
                     headers=self.headers,
                     params={
-                        "filter[entity]": entity_type,
+                        "filter[entity]": api_entity_type,
                         "filter[entity_id]": entity_id,
-                        "filter[type][]": ["incoming_call", "outgoing_call"]
+                        "filter[type][0]": "outgoing_call",
+                        "filter[type][1]": "incoming_call"
                     }
                 )
+                
+                if response.status_code == 204:
+                    logger.info(f"Нет звонков для {entity_type}/{entity_id}")
+                    return []
+                    
                 response.raise_for_status()
                 data = response.json()
                 
-                if not data.get("_embedded", {}).get("events"):
-                    logger.warning(f"Нет событий звонков для {entity_type}/{entity_id}")
-                    return None
-                
-                # Берём последний звонок
-                latest_event = data["_embedded"]["events"][0]
-                logger.info(f"Найден звонок: {latest_event.get('id')}, тип: {latest_event.get('type')}")
-                
-                # Извлекаем URL записи из value_after
-                value_after = latest_event.get("value_after", [])
-                for item in value_after:
-                    if item.get("link"):
-                        logger.info(f"Найдена ссылка на запись: {item.get('link')[:50]}...")
-                        return item["link"]
-                
-                logger.warning(f"Нет ссылки на запись в событии: {latest_event}")
-                return None
+                events = data.get("_embedded", {}).get("events", [])
+                logger.info(f"Найдено {len(events)} звонков для {entity_type}/{entity_id}")
+                return events
                 
         except Exception as e:
-            logger.error(f"Ошибка получения записи звонка: {e}")
-            raise
-    
-    async def get_call_info_by_note_id(self, note_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Получает информацию о звонке по ID примечания.
-        Используется когда webhook срабатывает на добавление примечания.
-        
-        Args:
-            note_id: ID примечания
-            
-        Returns:
-            Словарь с информацией о звонке
-        """
-        try:
-            async with httpx.AsyncClient() as client:
-                # Ищем примечание по всем сущностям
-                for entity_type in ["leads", "contacts", "companies"]:
-                    response = await client.get(
-                        f"{self.base_url}/{entity_type}/notes",
-                        headers=self.headers,
-                        params={"filter[id]": note_id}
-                    )
-                    
-                    if response.status_code == 200:
-                        data = response.json()
-                        notes = data.get("_embedded", {}).get("notes", [])
-                        if notes:
-                            return notes[0]
-                
-                return None
-                
-        except Exception as e:
-            logger.error(f"Ошибка получения примечания: {e}")
-            raise
+            logger.error(f"Ошибка получения звонков для {entity_type}/{entity_id}: {e}")
+            return []
     
     async def download_call_recording(self, url: str) -> bytes:
         """
