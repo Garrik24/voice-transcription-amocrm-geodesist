@@ -445,6 +445,44 @@ class AmoCRMService:
             return MANAGERS[str(user_id)]
         
         return f"Менеджер #{user_id}"
+    
+    async def get_linked_lead(self, contact_id: int) -> Optional[int]:
+        """
+        Получает ID сделки, привязанной к контакту.
+        
+        Args:
+            contact_id: ID контакта
+            
+        Returns:
+            ID сделки или None
+        """
+        try:
+            async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+                response = await client.get(
+                    f"{self.base_url}/contacts/{contact_id}/links",
+                    headers=self.headers
+                )
+                
+                if response.status_code == 204:
+                    return None
+                    
+                response.raise_for_status()
+                data = response.json()
+                
+                # Ищем связь с leads
+                links = data.get("_embedded", {}).get("links", [])
+                for link in links:
+                    if link.get("to_entity_type") == "leads":
+                        lead_id = link.get("to_entity_id")
+                        logger.info(f"🔗 Контакт {contact_id} → Сделка {lead_id}")
+                        return lead_id
+                
+                logger.warning(f"У контакта {contact_id} нет привязанной сделки")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Ошибка получения связей контакта {contact_id}: {e}")
+            return None
 
 
 # Синглтон для использования во всём приложении

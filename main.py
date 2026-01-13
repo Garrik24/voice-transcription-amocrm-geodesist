@@ -60,7 +60,7 @@ app = FastAPI(
 
 
 async def process_call(
-    lead_id: int,
+    entity_id: int,
     call_type: str,
     record_url: str,
     responsible_user_id: Optional[int] = None,
@@ -75,7 +75,24 @@ async def process_call(
     from config import AMOCRM_DOMAIN
     
     try:
-        logger.info(f"📞 Обработка звонка для сделки #{lead_id}, тип: {call_type}")
+        # ВАЖНО: если звонок привязан к контакту, находим его сделку!
+        lead_id = entity_id
+        target_entity_type = entity_type
+        
+        if entity_type == "contact" or entity_type == "contacts":
+            logger.info(f"🔍 Звонок привязан к контакту #{entity_id}, ищем сделку...")
+            linked_lead = await amocrm_service.get_linked_lead(entity_id)
+            
+            if linked_lead:
+                lead_id = linked_lead
+                target_entity_type = "leads"
+                logger.info(f"✅ Найдена сделка #{lead_id}")
+            else:
+                # Если нет привязанной сделки, добавляем к контакту
+                logger.warning(f"⚠️ У контакта #{entity_id} нет сделки, добавляем к контакту")
+                target_entity_type = "contacts"
+        
+        logger.info(f"📞 Обработка звонка → {target_entity_type}/{lead_id}, тип: {call_type}")
         
         # 1. Получаем имя менеджера
         manager_name = "Менеджер"
@@ -127,13 +144,13 @@ async def process_call(
             manager_name=manager_name
         )
         
-        # 7. Сохраняем в AmoCRM (в правильную сущность - lead или contact)
-        logger.info(f"💾 Сохраняем в {entity_type}/{lead_id}...")
-        await amocrm_service.add_note_to_entity(lead_id, note_text, entity_type)
+        # 7. Сохраняем в AmoCRM (в СДЕЛКУ!)
+        logger.info(f"💾 Сохраняем в {target_entity_type}/{lead_id}...")
+        await amocrm_service.add_note_to_entity(lead_id, note_text, target_entity_type)
         
         # 8. Отправляем красивый анализ в Telegram
         call_datetime = datetime.now().strftime("%d.%m.%Y %H:%M")
-        amocrm_url = f"https://{AMOCRM_DOMAIN}/{entity_type}/detail/{lead_id}"
+        amocrm_url = f"https://{AMOCRM_DOMAIN}/{target_entity_type}/detail/{lead_id}"
         
         await telegram_service.send_call_analysis(
             call_datetime=call_datetime,
@@ -217,7 +234,7 @@ async def amocrm_webhook(request: Request, background_tasks: BackgroundTasks):
                     # Запускаем транскрибацию в фоне
                     background_tasks.add_task(
                         process_call,
-                        lead_id=call_data["entity_id"],
+                        entity_id=call_data["entity_id"],
                         call_type=call_data["event_type"],
                         record_url=call_data["record_url"],
                         responsible_user_id=call_data.get("created_by"),
