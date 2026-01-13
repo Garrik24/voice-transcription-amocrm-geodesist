@@ -184,14 +184,30 @@ async def amocrm_webhook(request: Request, background_tasks: BackgroundTasks):
         form_data = await request.form()
         body = dict(form_data)
         
+        # ВАЖНО: Логируем ВСЕ данные для отладки
         logger.info(f"📨 Получен webhook от AmoCRM")
-        logger.debug(f"Данные: {body}")
+        logger.info(f"📦 Ключи в body: {list(body.keys())}")
+        logger.info(f"📦 Полные данные: {body}")
         
         # AmoCRM может отправлять разные типы событий
         # Нас интересуют события о звонках
         
+        # Отправим в Telegram для отладки
+        await telegram_service.send_message(
+            f"📨 Webhook получен!\n\nКлючи: {list(body.keys())}\n\nДанные: {str(body)[:1000]}",
+            disable_notification=True
+        )
+        
         # Вариант 1: Событие о добавлении примечания типа "звонок"
-        if "notes[add]" in str(body):
+        # AmoCRM отправляет данные в формате notes[add][0][field_name]
+        notes_data = {}
+        for key, value in body.items():
+            if key.startswith("notes["):
+                notes_data[key] = value
+        
+        logger.info(f"📝 Данные примечаний: {notes_data}")
+        
+        if notes_data or "notes[add]" in str(body):
             notes = body.get("notes[add]", [])
             if isinstance(notes, str):
                 import json
