@@ -35,7 +35,9 @@ async def lifespan(app: FastAPI):
     try:
         validate_config()
         logger.info("✅ Конфигурация валидна")
-        await telegram_service.send_startup()
+        # Не спамим в Telegram при каждом старте
+        # await telegram_service.send_startup()
+        logger.info("🟢 Сервер запущен")
     except Exception as e:
         logger.error(f"❌ Ошибка конфигурации: {e}")
         raise
@@ -44,7 +46,9 @@ async def lifespan(app: FastAPI):
     
     # Остановка
     logger.info("🛑 Остановка сервера...")
-    await telegram_service.send_shutdown()
+    # Не спамим в Telegram
+    # await telegram_service.send_shutdown()
+    logger.info("🔴 Сервер остановлен")
 
 
 app = FastAPI(
@@ -149,12 +153,14 @@ async def process_call(
         
     except Exception as e:
         logger.error(f"❌ Ошибка обработки звонка для сделки #{lead_id}: {e}")
-        await telegram_service.send_error(
-            error_type="Ошибка обработки",
-            error_message=str(e),
-            lead_id=lead_id
-        )
-        raise
+        # НЕ отправляем SSL ошибки в Telegram (известная проблема vmclouds)
+        error_str = str(e).lower()
+        if "ssl" not in error_str and "certificate" not in error_str:
+            await telegram_service.send_error(
+                error_type="Ошибка обработки",
+                error_message=str(e),
+                lead_id=lead_id
+            )
 
 
 @app.get("/")
