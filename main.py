@@ -111,18 +111,15 @@ async def process_call(
                 responsible_user_id=responsible_user_id
             )
             
-            if found_lead:
+            if found_lead and found_lead != entity_id:
+                # Убеждаемся, что получили ID сделки, а не контакта
                 lead_id = found_lead
                 target_entity_type = "leads"
-                logger.info(f"✅ Используем сделку #{lead_id}")
+                logger.info(f"✅ Используем сделку #{lead_id} для контакта #{entity_id}")
             else:
-                # Крайний случай - не удалось создать сделку
-                logger.error(f"❌ Не удалось найти/создать сделку для контакта #{entity_id}")
-                await telegram_service.send_error(
-                    error_type="Ошибка сделки",
-                    error_message=f"Не удалось создать сделку для контакта {entity_id}",
-                    lead_id=entity_id
-                )
+                # Крайний случай - не удалось создать сделку или вернулся тот же ID
+                logger.error(f"❌ Не удалось найти/создать сделку для контакта #{entity_id}. Получено: {found_lead}")
+                # НЕ отправляем в Telegram - только логируем
                 return
         
         logger.info(f"📞 Обработка звонка → {target_entity_type}/{lead_id}, тип: {call_type}")
@@ -178,8 +175,17 @@ async def process_call(
         )
         
         # 7. Сохраняем в AmoCRM (в СДЕЛКУ!)
-        logger.info(f"💾 Сохраняем в {target_entity_type}/{lead_id}...")
-        await amocrm_service.add_note_to_entity(lead_id, note_text, target_entity_type)
+        logger.info(f"💾 Сохраняем примечание в {target_entity_type}/{lead_id}...")
+        try:
+            await amocrm_service.add_note_to_entity(lead_id, note_text, target_entity_type)
+            logger.info(f"✅ Примечание успешно добавлено к {target_entity_type}/{lead_id}")
+        except Exception as note_error:
+            logger.error(f"❌ Ошибка добавления примечания к {target_entity_type}/{lead_id}: {note_error}")
+            # Проверяем, может быть это ID контакта, а не сделки?
+            if target_entity_type == "leads":
+                logger.error(f"⚠️ ВНИМАНИЕ: Пытались добавить примечание к сделке #{lead_id}, но получили ошибку!")
+                logger.error(f"⚠️ Возможно, {lead_id} - это ID контакта, а не сделки!")
+            raise
         
         # 8. Отправляем красивый анализ в Telegram
         call_datetime = datetime.now().strftime("%d.%m.%Y %H:%M")
@@ -203,14 +209,7 @@ async def process_call(
         
     except Exception as e:
         logger.error(f"❌ Ошибка обработки звонка для сделки #{lead_id}: {e}")
-        # НЕ отправляем SSL ошибки в Telegram (известная проблема vmclouds)
-        error_str = str(e).lower()
-        if "ssl" not in error_str and "certificate" not in error_str:
-            await telegram_service.send_error(
-                error_type="Ошибка обработки",
-                error_message=str(e),
-                lead_id=lead_id
-            )
+        # НЕ отправляем ошибки в Telegram - только логируем (избегаем спама)
 
 
 @app.get("/")
@@ -482,11 +481,7 @@ async def process_uploaded_audio(
         
     except Exception as e:
         logger.error(f"❌ Ошибка обработки: {e}")
-        await telegram_service.send_error(
-            error_type="Ошибка обработки загруженного файла",
-            error_message=str(e),
-            lead_id=lead_id
-        )
+        # НЕ отправляем ошибки в Telegram - только логируем (избегаем спама)
 
 
 if __name__ == "__main__":

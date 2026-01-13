@@ -392,7 +392,15 @@ class AmoCRMService:
                 )
                 
                 if response.status_code == 400:
-                    logger.error(f"AmoCRM вернул 400: {response.text}")
+                    error_text = response.text
+                    try:
+                        error_json = response.json()
+                        logger.error(f"AmoCRM вернул 400 для {entity_type}/{entity_id}: {error_json}")
+                    except:
+                        logger.error(f"AmoCRM вернул 400 для {entity_type}/{entity_id}: {error_text}")
+                    # Пробуем получить больше информации об ошибке
+                    logger.error(f"Запрос был: POST {self.base_url}/{entity_type}/{entity_id}/notes")
+                    logger.error(f"Текст примечания (первые 200 символов): {text[:200]}")
                 
                 response.raise_for_status()
                 logger.info(f"Примечание добавлено к {entity_type}/{entity_id}")
