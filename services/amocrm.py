@@ -166,6 +166,9 @@ class AmoCRMService:
             
             logger.info(f"✅ Найдена ссылка на запись: {record_link[:50]}...")
             
+            # Извлекаем телефон из params
+            phone = params.get("phone", "")
+            
             return {
                 "event_id": event_id,
                 "event_type": event_type,
@@ -174,6 +177,7 @@ class AmoCRMService:
                 "note_id": note_id,
                 "record_url": record_link,
                 "created_by": created_by,
+                "phone": phone,
                 "params": params
             }
             

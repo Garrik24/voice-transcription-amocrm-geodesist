@@ -95,6 +95,54 @@ class TelegramService:
         
         return await self.send_message(text)
     
+    async def send_call_analysis(
+        self,
+        call_datetime: str,
+        call_type: str,
+        phone: str,
+        manager_name: str,
+        client_name: str,
+        summary: str,
+        manager_rating: int,
+        what_good: str,
+        what_improve: str,
+        amocrm_url: str,
+        record_url: str = ""
+    ) -> bool:
+        """
+        Отправляет красивый анализ звонка в Telegram.
+        Формат как в Make.com автоматизации.
+        """
+        from datetime import datetime
+        
+        call_type_str = "Входящий" if call_type == "incoming" else "Исходящий"
+        
+        text = f"""📊 <b>АНАЛИЗ ЗВОНКА</b>
+
+📅 {call_datetime}
+📞 {call_type_str}
+☎️ Тел: {phone}
+
+<b>Спикеры:</b>
+- {manager_name} (менеджер)
+- {client_name} (клиент)
+
+<b>Суть:</b>
+{summary}
+
+⭐ <b>Оценка менеджера:</b> {manager_rating}
+
+✅ <b>Что хорошо:</b> {what_good}
+
+⚠️ <b>Что улучшить:</b> {what_improve}
+
+🔗 <a href="{amocrm_url}">AmoCRM</a>"""
+        
+        if record_url:
+            text += f"\n🎧 <a href=\"{record_url}\">Запись звонка</a>"
+        
+        return await self.send_message(text, disable_notification=False)
+    
     async def send_success(
         self,
         lead_id: int,
@@ -102,28 +150,15 @@ class TelegramService:
         call_result: str,
         duration_seconds: float
     ) -> bool:
-        """
-        Отправляет уведомление об успешной обработке.
-        (Опционально, можно отключить)
-        
-        Args:
-            lead_id: ID сделки
-            client_name: Имя клиента
-            call_result: Итог звонка
-            duration_seconds: Длительность
-            
-        Returns:
-            True если успешно
-        """
+        """Простое уведомление об успехе (для обратной совместимости)"""
         minutes = int(duration_seconds // 60)
         seconds = int(duration_seconds % 60)
-        duration_str = f"{minutes}:{seconds:02d}"
         
         text = f"""✅ <b>Звонок обработан</b>
 
 <b>Сделка:</b> #{lead_id}
 <b>Клиент:</b> {client_name}
-<b>Длительность:</b> {duration_str}
+<b>Длительность:</b> {minutes}:{seconds:02d}
 <b>Итог:</b> {call_result}"""
         
         return await self.send_message(text, disable_notification=True)

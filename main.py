@@ -59,18 +59,17 @@ async def process_call(
     lead_id: int,
     call_type: str,
     record_url: str,
-    responsible_user_id: Optional[int] = None
+    responsible_user_id: Optional[int] = None,
+    phone: str = "",
+    entity_type: str = "leads"
 ):
     """
     Основная функция обработки звонка.
     Выполняется в фоновом режиме.
-    
-    Args:
-        lead_id: ID сделки
-        call_type: Тип звонка (incoming_call/outgoing_call)
-        record_url: URL записи звонка
-        responsible_user_id: ID ответственного менеджера
     """
+    from datetime import datetime
+    from config import AMOCRM_DOMAIN
+    
     try:
         logger.info(f"📞 Обработка звонка для сделки #{lead_id}, тип: {call_type}")
         
@@ -128,12 +127,22 @@ async def process_call(
         logger.info(f"💾 Сохраняем в сделку #{lead_id}...")
         await amocrm_service.add_note_to_lead(lead_id, note_text)
         
-        # 8. ТОЛЬКО ФИНАЛЬНОЕ уведомление об успехе
-        await telegram_service.send_success(
-            lead_id=lead_id,
+        # 8. Отправляем красивый анализ в Telegram
+        call_datetime = datetime.now().strftime("%d.%m.%Y %H:%M")
+        amocrm_url = f"https://{AMOCRM_DOMAIN}/{entity_type}/detail/{lead_id}"
+        
+        await telegram_service.send_call_analysis(
+            call_datetime=call_datetime,
+            call_type=call_type_simple,
+            phone=phone or "Не определён",
+            manager_name=analysis.manager_name,
             client_name=analysis.client_name,
-            call_result=analysis.call_result,
-            duration_seconds=transcription.duration_seconds
+            summary=analysis.summary,
+            manager_rating=analysis.manager_rating,
+            what_good=analysis.what_good,
+            what_improve=analysis.what_improve,
+            amocrm_url=amocrm_url,
+            record_url=record_url
         )
         
         logger.info(f"✅ Звонок для сделки #{lead_id} успешно обработан!")
@@ -199,13 +208,15 @@ async def amocrm_webhook(request: Request, background_tasks: BackgroundTasks):
                 if call_data and call_data.get("record_url"):
                     logger.info(f"✅ Звонок {call_data['event_id']} → обработка")
                     
-                    # Запускаем транскрибацию в фоне (БЕЗ уведомлений)
+                    # Запускаем транскрибацию в фоне
                     background_tasks.add_task(
                         process_call,
                         lead_id=call_data["entity_id"],
                         call_type=call_data["event_type"],
                         record_url=call_data["record_url"],
-                        responsible_user_id=call_data.get("created_by")
+                        responsible_user_id=call_data.get("created_by"),
+                        phone=call_data.get("phone", ""),
+                        entity_type=call_data.get("entity_type", "leads")
                     )
                     processed += 1
                     
