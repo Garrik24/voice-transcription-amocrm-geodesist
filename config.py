@@ -56,17 +56,30 @@ MANAGERS = {
 }
 
 def validate_config():
-    """Проверяет, что все необходимые переменные заданы"""
+    """
+    Проверяет конфигурацию.
+
+    ВАЖНО: сервис может работать в разных режимах (транскрибация звонков / уведомления геодезиста),
+    поэтому на старте не валим процесс из-за отсутствия ключей, которые не используются.
+
+    Возвращает список отсутствующих переменных (пустой список = всё ок).
+    """
     required = [
+        # AmoCRM нужно для записи примечаний и чтения сделок/контактов
         ("AMOCRM_DOMAIN", AMOCRM_DOMAIN),
         ("AMOCRM_ACCESS_TOKEN", AMOCRM_ACCESS_TOKEN),
+    ]
+
+    optional_groups = [
+        # Транскрибация/анализ
         ("ASSEMBLYAI_API_KEY", ASSEMBLYAI_API_KEY),
         ("OPENAI_API_KEY", OPENAI_API_KEY),
+        # Уведомление геодезиста через MAX (Wappi)
+        ("WAPPI_API_TOKEN", WAPPI_API_TOKEN),
+        ("WAPPI_MAX_PROFILE_ID", WAPPI_MAX_PROFILE_ID),
     ]
-    
-    missing = [name for name, value in required if not value]
-    
-    if missing:
-        raise ValueError(f"Отсутствуют обязательные переменные окружения: {', '.join(missing)}")
-    
-    return True
+
+    missing_required = [name for name, value in required if not value]
+    missing_optional = [name for name, value in optional_groups if not value]
+
+    return missing_required + missing_optional
