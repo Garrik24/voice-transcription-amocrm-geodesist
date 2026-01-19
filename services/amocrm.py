@@ -71,6 +71,56 @@ class AmoCRMService:
             logger.error(f"Ошибка получения звонков: {e}")
             return []
     
+    async def get_recent_notes(self, entity_type: str, entity_id: int, limit: int = 5) -> list:
+        """
+        Получает последние примечания сущности.
+        Используется когда webhook не содержит note_id.
+        
+        Args:
+            entity_type: Тип сущности (lead, contact, company)
+            entity_id: ID сущности
+            limit: Количество примечаний
+            
+        Returns:
+            Список примечаний
+        """
+        try:
+            # Преобразуем entity_type
+            type_map = {
+                "lead": "leads",
+                "contact": "contacts",
+                "company": "companies",
+                "leads": "leads",
+                "contacts": "contacts",
+                "companies": "companies"
+            }
+            api_type = type_map.get(entity_type, entity_type)
+            
+            url = f"{self.base_url}/{api_type}/{entity_id}/notes"
+            logger.info(f"Запрос примечаний: {url}")
+            
+            async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+                response = await client.get(
+                    url,
+                    headers=self.headers,
+                    params={"limit": limit}
+                )
+                
+                if response.status_code == 204:
+                    logger.info(f"Нет примечаний для {api_type}/{entity_id}")
+                    return []
+                    
+                response.raise_for_status()
+                data = response.json()
+                
+                notes = data.get("_embedded", {}).get("notes", [])
+                logger.info(f"Найдено {len(notes)} примечаний для {api_type}/{entity_id}")
+                return notes
+                
+        except Exception as e:
+            logger.error(f"Ошибка получения примечаний: {e}")
+            return []
+    
     async def get_note_with_recording(self, entity_type: str, entity_id: int, note_id: int) -> Optional[Dict[str, Any]]:
         """
         Получает примечание с записью звонка.

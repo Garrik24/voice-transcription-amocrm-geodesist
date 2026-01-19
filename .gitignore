@@ -5,6 +5,9 @@
 *.local.txt
 RAILWAY_SECRETS*
 
+# Project local
+backups/
+
 # Python
 __pycache__/
 *.py[cod]

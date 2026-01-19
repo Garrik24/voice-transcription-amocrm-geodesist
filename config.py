@@ -25,6 +25,23 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # ID чата для уведомлений об ошибках
 
+# ============== Wappi (MAX) ==============
+# Токен Wappi передаётся в header Authorization
+WAPPI_API_TOKEN = os.getenv("WAPPI_API_TOKEN")
+# profile_id MAX профиля в Wappi
+WAPPI_MAX_PROFILE_ID = os.getenv("WAPPI_MAX_PROFILE_ID")
+
+# ============== Геодезисты ==============
+# Телефоны геодезистов (формат: 79XXXXXXXXX или +79...)
+GEODESIST_1_PHONE = os.getenv("GEODESIST_1_PHONE", "")
+GEODESIST_2_PHONE = os.getenv("GEODESIST_2_PHONE", "")
+
+# ============== AmoCRM поля сделки (custom_fields_values) ==============
+# Храним как строки (IDs в Amo обычно числа, но читаются как строки из env)
+AMO_FIELD_WORK_TYPE = os.getenv("AMO_FIELD_WORK_TYPE", "")
+AMO_FIELD_ADDRESS = os.getenv("AMO_FIELD_ADDRESS", "")
+AMO_FIELD_TIME_SLOT = os.getenv("AMO_FIELD_TIME_SLOT", "")
+
 # ============== Приложение ==============
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 PORT = int(os.getenv("PORT", 8000))

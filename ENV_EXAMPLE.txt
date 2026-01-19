@@ -19,6 +19,19 @@ OPENAI_API_KEY=sk-your_openai_api_key_here
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
 TELEGRAM_CHAT_ID=your_telegram_chat_id_here
 
+# Wappi (MAX)
+WAPPI_API_TOKEN=your_wappi_api_token_here
+WAPPI_MAX_PROFILE_ID=your_wappi_max_profile_id_here
+
+# Геодезисты (телефоны)
+GEODESIST_1_PHONE=79110000000
+GEODESIST_2_PHONE=79220000000
+
+# AmoCRM custom fields (ID полей сделки)
+AMO_FIELD_WORK_TYPE=000000
+AMO_FIELD_ADDRESS=000000
+AMO_FIELD_TIME_SLOT=000000
+
 # Приложение
 DEBUG=false
 PORT=8000

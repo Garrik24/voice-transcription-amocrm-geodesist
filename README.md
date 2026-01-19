@@ -100,6 +100,7 @@ python main.py
 | GET | `/` | Информация о сервисе |
 | GET | `/health` | Health check |
 | POST | `/webhook/amocrm` | Webhook для AmoCRM |
+| POST | `/webhook/amocrm/geodesist-assigned` | Webhook: уведомление геодезиста (MAX/Wappi) |
 | POST | `/webhook/test` | Тестовый endpoint |
 
 ### Тестовый запрос

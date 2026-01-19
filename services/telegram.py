@@ -4,7 +4,7 @@
 """
 import httpx
 import logging
-from typing import Optional
+from typing import Optional, List
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 
 logger = logging.getLogger(__name__)
@@ -103,11 +103,16 @@ class TelegramService:
         manager_name: str,
         client_name: str,
         summary: str,
-        manager_rating: int,
-        what_good: str,
-        what_improve: str,
         amocrm_url: str,
         record_url: str = ""
+        ,
+        client_city: str = "Не указано",
+        work_type: str = "Консультация",
+        cost: str = "Не обсуждали",
+        payment_terms: str = "Не обсуждали",
+        call_result: str = "Не определено",
+        next_contact_date: str = "Не указано",
+        next_steps: Optional[List[str]] = None,
     ) -> bool:
         """
         Отправляет красивый анализ звонка в Telegram.
@@ -116,6 +121,10 @@ class TelegramService:
         from datetime import datetime
         
         call_type_str = "Входящий" if call_type == "incoming" else "Исходящий"
+
+        steps_block = ""
+        if next_steps:
+            steps_block = "\n\n✅ <b>Следующие шаги:</b>\n" + "\n".join([f"- {s}" for s in next_steps])
         
         text = f"""📊 <b>АНАЛИЗ ЗВОНКА</b>
 
@@ -130,11 +139,13 @@ class TelegramService:
 <b>Суть:</b>
 {summary}
 
-⭐ <b>Оценка менеджера:</b> {manager_rating}
-
-✅ <b>Что хорошо:</b> {what_good}
-
-⚠️ <b>Что улучшить:</b> {what_improve}
+<b>Факты:</b>
+📍 {client_city}
+🔧 {work_type}
+💰 {cost}
+💳 {payment_terms}
+📊 {call_result}
+📅 {next_contact_date}{steps_block}
 
 🔗 <a href="{amocrm_url}">AmoCRM</a>"""
         

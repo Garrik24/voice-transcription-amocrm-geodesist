@@ -18,6 +18,8 @@ from services.amocrm import amocrm_service
 from services.transcription import transcription_service
 from services.analysis import analysis_service
 from services.telegram import telegram_service
+from automations.geodesist_notification.handler import notify_geodesist
+from automations.geodesist_notification.types import GeodesistWebhookPayload
 
 # Настраиваем логирование
 logging.basicConfig(
@@ -107,7 +109,9 @@ async def process_call(
         lead_id = entity_id
         target_entity_type = entity_type
         
-        if entity_type == "contact" or entity_type == "contacts":
+        # Нормализуем entity_type для проверки (AmoCRM может вернуть "contact" или "contacts")
+        normalized_check = entity_type.lower()
+        if normalized_check in ["contact", "contacts"]:
             logger.info(f"🔍 Звонок привязан к контакту #{entity_id}")
             logger.info(f"📋 Запрашиваем сделки контакта #{entity_id}...")
             
@@ -214,11 +218,15 @@ async def process_call(
             manager_name=analysis.manager_name,
             client_name=analysis.client_name,
             summary=analysis.summary,
-            manager_rating=analysis.manager_rating,
-            what_good=analysis.what_good,
-            what_improve=analysis.what_improve,
             amocrm_url=amocrm_url,
-            record_url=record_url
+            record_url=record_url,
+            client_city=analysis.client_city,
+            work_type=analysis.work_type,
+            cost=analysis.cost,
+            payment_terms=analysis.payment_terms,
+            call_result=analysis.call_result,
+            next_contact_date=analysis.next_contact_date,
+            next_steps=analysis.next_steps,
         )
         
         logger.info(f"✅ Звонок для сделки #{lead_id} успешно обработан!")
@@ -248,87 +256,212 @@ async def health():
 async def amocrm_webhook(request: Request, background_tasks: BackgroundTasks):
     """
     Webhook endpoint для AmoCRM.
+    
+    AmoCRM отправляет webhook когда создаётся примечание о звонке.
+    Примечание уже содержит ссылку на запись (params.link).
     """
     try:
         # 1. Получаем данные от AmoCRM
         form_data = await request.form()
         body = dict(form_data)
-        logger.info(f"📨 Webhook от AmoCRM: {list(body.keys())[:5]}...")
         
-        # 2. Пытаемся извлечь ID сущности из вебхука (любого типа)
-        target_entity_id = None
-        target_entity_type = "leads"
-        
-        # Перебираем ключи, ищем [id] или [element_id]
-        for key, value in body.items():
-            if "[id]" in key or "[element_id]" in key:
-                try:
-                    target_entity_id = int(value)
-                    # Определяем тип сущности по ключу
-                    if "contacts" in key:
-                        target_entity_type = "contacts"
-                    elif "leads" in key:
-                        target_entity_type = "leads"
-                    break
-                except:
-                    continue
-        
-        if not target_entity_id:
-            logger.warning("⚠️ Не удалось найти ID сущности в вебхуке")
-            # На всякий случай проверяем недавние звонки (ограничим до 5 минут)
-            events = await amocrm_service.get_recent_calls(minutes=5)
+        # Логируем ВСЕ ключи связанные с примечаниями для отладки
+        note_keys = [k for k in body.keys() if '[note]' in k]
+        if note_keys:
+            logger.info(f"📨 Webhook примечание, ключей: {len(note_keys)}")
+            # Логируем первые 10 ключей для отладки
+            for k in note_keys[:10]:
+                logger.info(f"  {k} = {body[k]}")
         else:
-            logger.info(f"🔍 Webhook для {target_entity_type} #{target_entity_id}. Ищем звонки...")
-            # Запрашиваем звонки ТОЛЬКО для этой сущности
-            events = await amocrm_service.get_call_events_for_entity(target_entity_id, target_entity_type)
+            # Это не примечание - другой тип webhook
+            keys_preview = list(body.keys())[:5]
+            logger.info(f"📨 Webhook (не примечание): {keys_preview}")
         
-        if not events:
-            logger.info(f"📭 Звонков не обнаружено")
-            return JSONResponse(content={"status": "no_calls"}, status_code=200)
+        # 2. Ищем примечание о звонке в webhook
+        # AmoCRM отправляет: contacts[note][0][note][id], contacts[note][0][note][element_id], etc.
+        note_id = None
+        element_id = None  # ID контакта/сделки к которому привязано примечание
+        entity_type = None
+        note_type = None
+        responsible_user_id = None
         
-        # 3. Обрабатываем каждый звонок
-        processed = 0
-        for event in events:
-            try:
-                call_data = await amocrm_service.process_call_event(event)
-                
-                if call_data and call_data.get("record_url"):
-                    # ВАЖНО: нормализуем entity_type из события
-                    # AmoCRM возвращает "contact", "lead", "company" (единственное число)
-                    # Но нам нужно "contacts", "leads", "companies" для проверок
-                    raw_entity_type = call_data.get("entity_type", "lead")
-                    normalized_entity_type = {
-                        "contact": "contacts",
-                        "contacts": "contacts",
-                        "lead": "leads",
-                        "leads": "leads",
-                        "company": "companies",
-                        "companies": "companies"
-                    }.get(raw_entity_type.lower(), "leads")
-                    
-                    logger.info(f"📋 Звонок для {normalized_entity_type}/{call_data['entity_id']}, исходный тип: {raw_entity_type}")
-                    
-                    # Запускаем транскрибацию в фоне
-                    background_tasks.add_task(
-                        process_call,
-                        entity_id=call_data["entity_id"],
-                        call_type=call_data["event_type"],
-                        record_url=call_data["record_url"],
-                        responsible_user_id=call_data.get("created_by"),
-                        phone=call_data.get("phone", ""),
-                        entity_type=normalized_entity_type
-                    )
-                    processed += 1
-                    
-            except Exception as e:
-                logger.error(f" Ошибка обработки события звонка: {e}")
+        for key, value in body.items():
+            # Ищем note[id] - ID самого примечания
+            if "[note][id]" in key and value:
+                try:
+                    note_id = int(value)
+                except:
+                    pass
+            
+            # Ищем element_id - ID сущности (контакта/сделки)
+            if "[note][element_id]" in key and value:
+                try:
+                    element_id = int(value)
+                except:
+                    pass
+            
+            # Определяем тип сущности
+            if "contacts[note]" in key:
+                entity_type = "contacts"
+            elif "leads[note]" in key:
+                entity_type = "leads"
+            
+            # Тип примечания (call_in, call_out, common, etc.)
+            if "[note][note_type]" in key and value:
+                note_type = value
+            
+            # Ответственный
+            if "[note][responsible_user_id]" in key and value:
+                try:
+                    responsible_user_id = int(value)
+                except:
+                    pass
         
-        return JSONResponse(content={"status": "accepted", "processed": processed}, status_code=200)
+        # 3. Если это не примечание - игнорируем (не спамим в лог)
+        if not element_id or not entity_type:
+            # Это webhook о создании контакта/сделки/задачи - не о звонке
+            return JSONResponse(content={"status": "ignored", "reason": "not_a_note"}, status_code=200)
+        
+        # Логируем извлечённые данные для отладки
+        logger.info(f"📋 Извлечено: note_id={note_id}, element_id={element_id}, entity={entity_type}, note_type={note_type}")
+        
+        # 4. Получаем данные примечания
+        note_data = None
+        
+        if note_id:
+            # Если note_id найден - запрашиваем конкретное примечание
+            logger.info(f"📝 Запрос примечания #{note_id} для {entity_type}/{element_id}")
+            note_data = await amocrm_service.get_note_with_recording(
+                entity_type=entity_type.rstrip('s'),  # contacts -> contact
+                entity_id=element_id,
+                note_id=note_id
+            )
+        else:
+            # Если note_id не найден - получаем последние примечания и ищем звонок
+            logger.info(f"🔍 note_id не в webhook, ищем последние примечания {entity_type}/{element_id}")
+            recent_notes = await amocrm_service.get_recent_notes(
+                entity_type=entity_type,
+                entity_id=element_id,
+                limit=5
+            )
+            
+            # Ищем примечание о звонке среди последних
+            for note in recent_notes:
+                if note.get("note_type") in ["call_in", "call_out"]:
+                    note_data = note
+                    logger.info(f"✅ Найдено примечание о звонке: #{note.get('id')}")
+                    break
+        
+        if not note_data:
+            logger.warning(f"⚠️ Не удалось найти примечание о звонке")
+            return JSONResponse(content={"status": "note_not_found"}, status_code=200)
+        
+        # 6. Проверяем тип примечания
+        actual_note_type = note_data.get("note_type")
+        if actual_note_type not in ["call_in", "call_out"]:
+            # Это обычное примечание, не звонок
+            logger.info(f"⏭️ Примечание #{note_id} не звонок (тип: {actual_note_type})")
+            return JSONResponse(content={"status": "not_a_call", "note_type": actual_note_type}, status_code=200)
+        
+        # 7. Извлекаем ссылку на запись
+        params = note_data.get("params", {})
+        record_url = params.get("link")
+        phone = params.get("phone", "")
+        
+        if not record_url:
+            logger.warning(f"⚠️ Примечание #{note_id} без записи")
+            return JSONResponse(content={"status": "no_recording"}, status_code=200)
+        
+        logger.info(f"✅ Найден звонок! Тип: {actual_note_type}, запись: {record_url[:50]}...")
+        
+        # 8. Определяем тип звонка
+        call_type = "incoming_call" if actual_note_type == "call_in" else "outgoing_call"
+        
+        # 9. Запускаем обработку в фоне
+        background_tasks.add_task(
+            process_call,
+            entity_id=element_id,
+            call_type=call_type,
+            record_url=record_url,
+            responsible_user_id=responsible_user_id or note_data.get("responsible_user_id"),
+            phone=phone,
+            entity_type=entity_type
+        )
+        
+        return JSONResponse(content={"status": "processing", "note_id": note_id}, status_code=200)
         
     except Exception as e:
         logger.error(f"❌ Webhook ошибка: {e}")
         return JSONResponse(content={"status": "error"}, status_code=200)
 
+
+@app.post("/webhook/amocrm/geodesist-assigned")
+async def geodesist_assigned_webhook(request: Request, background_tasks: BackgroundTasks):
+    """
+    Webhook от робота AmoCRM на этапе "Назначен".
+    Ожидаем минимум: lead_id + (geodesist или geodesist_phone).
+
+    Поддерживаем JSON и form-urlencoded.
+    """
+    try:
+        content_type = (request.headers.get("content-type") or "").lower()
+
+        lead_id = None
+        geodesist = None
+        geodesist_phone = None
+        work_type = None
+        address = None
+        time_slot = None
+        client_name = None
+        client_phone = None
+
+        if "application/json" in content_type:
+            body = await request.json()
+            lead_id = body.get("lead_id") or body.get("leadId") or body.get("id")
+            geodesist = body.get("geodesist")
+            geodesist_phone = body.get("geodesist_phone") or body.get("geodesistPhone")
+            work_type = body.get("work_type") or body.get("workType")
+            address = body.get("address")
+            time_slot = body.get("time_slot") or body.get("timeSlot")
+            client_name = body.get("client_name") or body.get("clientName")
+            client_phone = body.get("client_phone") or body.get("clientPhone")
+        else:
+            form = await request.form()
+            body = dict(form)
+            lead_id = body.get("lead_id") or body.get("leadId") or body.get("id")
+            geodesist = body.get("geodesist")
+            geodesist_phone = body.get("geodesist_phone") or body.get("geodesistPhone")
+            work_type = body.get("work_type") or body.get("workType")
+            address = body.get("address")
+            time_slot = body.get("time_slot") or body.get("timeSlot")
+            client_name = body.get("client_name") or body.get("clientName")
+            client_phone = body.get("client_phone") or body.get("clientPhone")
+
+        if lead_id is None:
+            return JSONResponse(content={"status": "error", "reason": "lead_id_required"}, status_code=200)
+
+        try:
+            lead_id_int = int(str(lead_id).strip())
+        except Exception:
+            return JSONResponse(content={"status": "error", "reason": "lead_id_invalid"}, status_code=200)
+
+        payload = GeodesistWebhookPayload(
+            lead_id=lead_id_int,
+            geodesist=str(geodesist).strip() if geodesist is not None else None,
+            geodesist_phone=str(geodesist_phone).strip() if geodesist_phone is not None else None,
+            work_type=str(work_type).strip() if work_type is not None else None,
+            address=str(address).strip() if address is not None else None,
+            time_slot=str(time_slot).strip() if time_slot is not None else None,
+            client_name=str(client_name).strip() if client_name is not None else None,
+            client_phone=str(client_phone).strip() if client_phone is not None else None,
+        )
+
+        background_tasks.add_task(notify_geodesist, payload)
+        return JSONResponse(content={"status": "processing", "lead_id": lead_id_int}, status_code=200)
+
+    except Exception as e:
+        logger.error(f"❌ Геодезист webhook ошибка: {e}")
+        return JSONResponse(content={"status": "error"}, status_code=200)
 
 
 
