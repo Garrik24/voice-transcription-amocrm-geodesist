@@ -11,8 +11,23 @@ from config import OPENAI_API_KEY
 
 logger = logging.getLogger(__name__)
 
-# Настраиваем OpenAI
-client = openai.AsyncOpenAI(api_key=OPENAI_API_KEY)
+_client: openai.AsyncOpenAI | None = None
+
+
+def _get_client() -> openai.AsyncOpenAI:
+    """
+    Инициализируем OpenAI клиент лениво.
+
+    Важно для деплоя: если OPENAI_API_KEY не задан, сервис всё равно должен стартовать
+    (например, для автоматизаций без транскрибации).
+    """
+    global _client
+    if _client is not None:
+        return _client
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY не задан (нужен для анализа звонков)")
+    _client = openai.AsyncOpenAI(api_key=OPENAI_API_KEY)
+    return _client
 
 
 @dataclass
@@ -87,6 +102,7 @@ class AnalysisService:
             
             call_type_ru = "Входящий" if call_type == "incoming" else "Исходящий"
             
+            client = _get_client()
             response = await client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
