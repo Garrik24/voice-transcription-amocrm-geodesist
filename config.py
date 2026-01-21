@@ -46,6 +46,11 @@ AMO_FIELD_TIME_SLOT = os.getenv("AMO_FIELD_TIME_SLOT", "")
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 PORT = int(os.getenv("PORT", 8000))
 
+# Таймзона для отображения времени в сообщениях/заметках.
+# На Railway время процесса часто в UTC → для Москвы нужен сдвиг +3.
+# Можно переопределить переменной окружения, например: Europe/Moscow
+APP_TIMEZONE = os.getenv("APP_TIMEZONE", "Europe/Moscow")
+
 # ============== Список менеджеров ==============
 # Формат: {"user_id_в_amocrm": "Имя"}
 # Заполни ID своих менеджеров из AmoCRM

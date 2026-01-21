@@ -87,6 +87,7 @@ async def process_call(
     entity_id: int,
     call_type: str,
     record_url: str,
+    call_created_at: Optional[int] = None,
     responsible_user_id: Optional[int] = None,
     phone: str = "",
     entity_type: str = "leads"
@@ -213,7 +214,18 @@ async def process_call(
             raise
         
         # 8. Отправляем красивый анализ в Telegram
-        call_datetime = datetime.now().strftime("%d.%m.%Y %H:%M")
+        # Важно: берём время звонка из AmoCRM (created_at) и отображаем в нужной таймзоне.
+        from zoneinfo import ZoneInfo
+        from config import APP_TIMEZONE
+
+        if call_created_at:
+            ts = int(call_created_at)
+            # подстрахуемся: иногда timestamps приходят в миллисекундах
+            if ts > 10**12:
+                ts = ts // 1000
+            call_datetime = datetime.fromtimestamp(ts, tz=ZoneInfo(APP_TIMEZONE)).strftime("%d.%m.%Y %H:%M")
+        else:
+            call_datetime = datetime.now(ZoneInfo(APP_TIMEZONE)).strftime("%d.%m.%Y %H:%M")
         amocrm_url = f"https://{AMOCRM_DOMAIN}/{target_entity_type}/detail/{lead_id}"
         
         await telegram_service.send_call_analysis(
@@ -388,6 +400,7 @@ async def amocrm_webhook(request: Request, background_tasks: BackgroundTasks):
             entity_id=element_id,
             call_type=call_type,
             record_url=record_url,
+            call_created_at=note_data.get("created_at"),
             responsible_user_id=responsible_user_id or note_data.get("responsible_user_id"),
             phone=phone,
             entity_type=entity_type

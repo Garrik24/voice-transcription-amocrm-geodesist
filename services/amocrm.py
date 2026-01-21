@@ -182,6 +182,7 @@ class AmoCRMService:
             entity_type = event.get("entity_type")  # lead, contact, company
             entity_id = event.get("entity_id")
             created_by = event.get("created_by")
+            created_at = event.get("created_at")  # Unix timestamp (сек), время события в AmoCRM
             
             logger.info(f"Обработка события #{event_id}: {event_type} для {entity_type}/{entity_id}")
             
@@ -227,6 +228,7 @@ class AmoCRMService:
                 "note_id": note_id,
                 "record_url": record_link,
                 "created_by": created_by,
+                "created_at": created_at,
                 "phone": phone,
                 "params": params
             }

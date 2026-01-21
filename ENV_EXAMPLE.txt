@@ -35,3 +35,6 @@ AMO_FIELD_TIME_SLOT=000000
 # Приложение
 DEBUG=false
 PORT=8000
+
+# Таймзона отображения времени (по умолчанию Europe/Moscow)
+APP_TIMEZONE=Europe/Moscow

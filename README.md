@@ -58,6 +58,7 @@ voice-transcription/
 | `OPENAI_API_KEY` | ключ из OpenAI |
 | `TELEGRAM_BOT_TOKEN` | токен бота (опционально) |
 | `TELEGRAM_CHAT_ID` | ID чата (опционально) |
+| `APP_TIMEZONE` | таймзона для отображения времени (опционально, напр. `Europe/Moscow`) |
 
 ### 3. Получи URL сервиса
 
