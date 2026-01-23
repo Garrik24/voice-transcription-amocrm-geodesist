@@ -55,7 +55,11 @@ voice-transcription/
 | `AMOCRM_DOMAIN` | твой-домен.amocrm.ru |
 | `AMOCRM_ACCESS_TOKEN` | токен из AmoCRM |
 | `ASSEMBLYAI_API_KEY` | ключ из AssemblyAI |
-| `OPENAI_API_KEY` | ключ из OpenAI |
+| `LLM_PROVIDER` | `openai` или `gemini` (по умолчанию `openai`) |
+| `OPENAI_API_KEY` | ключ из OpenAI (нужен если `LLM_PROVIDER=openai`) |
+| `OPENAI_MODEL` | модель OpenAI (опционально, по умолчанию `gpt-4o-mini`) |
+| `GEMINI_API_KEY` | ключ из Google Gemini (нужен если `LLM_PROVIDER=gemini`) |
+| `GEMINI_MODEL` | модель Gemini (опционально, по умолчанию `gemini-2.0-flash-001`) |
 | `TELEGRAM_BOT_TOKEN` | токен бота (опционально) |
 | `TELEGRAM_CHAT_ID` | ID чата (опционально) |
 | `APP_TIMEZONE` | таймзона для отображения времени (опционально, напр. `Europe/Moscow`) |

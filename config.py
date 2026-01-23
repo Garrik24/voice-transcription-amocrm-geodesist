@@ -21,6 +21,17 @@ ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
 # ============== OpenAI ==============
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+# ============== LLM provider switch (OpenAI / Gemini) ==============
+# openai | gemini
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").strip().lower()
+
+# Модели (можно переопределить в Railway Variables)
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+# Google Gemini (google-genai SDK)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-001")
+
 # ============== Telegram ==============
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # ID чата для уведомлений об ошибках

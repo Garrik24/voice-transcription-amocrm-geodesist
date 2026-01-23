@@ -5,13 +5,48 @@
 import openai
 import json
 import logging
+import re
 from typing import List
 from dataclasses import dataclass
-from config import OPENAI_API_KEY
+from config import (
+    GEMINI_API_KEY,
+    GEMINI_MODEL,
+    LLM_PROVIDER,
+    OPENAI_API_KEY,
+    OPENAI_MODEL,
+)
 
 logger = logging.getLogger(__name__)
 
 _client: openai.AsyncOpenAI | None = None
+_gemini_client = None
+
+
+def _normalize_list_field(value) -> List[str]:
+    """
+    Нормализует поле, которое может прийти как:
+    - list[str]
+    - многострочная строка с буллетами/нумерацией
+    - None
+    """
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(x).strip() for x in value if str(x).strip()]
+    if isinstance(value, str):
+        items: List[str] = []
+        for line in value.splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            # убираем буллеты и нумерацию в начале строки
+            s = re.sub(r"^(\s*[-•]\s+|\s*\d+\s*[).]\s+)", "", s).strip()
+            if s:
+                items.append(s)
+        return items
+    # fallback
+    s = str(value).strip()
+    return [s] if s else []
 
 
 def _get_client() -> openai.AsyncOpenAI:
@@ -28,6 +63,24 @@ def _get_client() -> openai.AsyncOpenAI:
         raise RuntimeError("OPENAI_API_KEY не задан (нужен для анализа звонков)")
     _client = openai.AsyncOpenAI(api_key=OPENAI_API_KEY)
     return _client
+
+
+def _get_gemini_client():
+    """
+    Инициализируем Google GenAI (Gemini) клиент лениво.
+
+    Важно: ключи не валим на старте приложения — только при попытке анализа.
+    """
+    global _gemini_client
+    if _gemini_client is not None:
+        return _gemini_client
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY не задан (нужен для анализа звонков через Gemini)")
+    # Импортируем внутри, чтобы не падать, если провайдер не используется.
+    from google import genai
+
+    _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+    return _gemini_client
 
 
 @dataclass
@@ -102,25 +155,84 @@ class AnalysisService:
             logger.info(f"Анализируем разговор ({len(transcript)} символов)...")
             
             call_type_ru = "Входящий" if call_type == "incoming" else "Исходящий"
-            
-            client = _get_client()
-            response = await client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
-                    {"role": "user", "content": ANALYSIS_USER_PROMPT.format(
+
+            provider = (LLM_PROVIDER or "openai").strip().lower()
+
+            if provider == "gemini":
+                gemini = _get_gemini_client()
+                from google.genai import types
+
+                # Схема ответа: строго JSON-объект с ожидаемыми полями.
+                response_schema = {
+                    "type": "OBJECT",
+                    "required": [
+                        "client_name",
+                        "manager_name",
+                        "summary",
+                        "client_city",
+                        "work_type",
+                        "cost",
+                        "payment_terms",
+                        "call_result",
+                        "next_contact_date",
+                        "next_steps",
+                    ],
+                    "properties": {
+                        "client_name": {"type": "STRING"},
+                        "manager_name": {"type": "STRING"},
+                        "summary": {"type": "STRING"},
+                        "client_city": {"type": "STRING"},
+                        "work_type": {"type": "STRING"},
+                        "cost": {"type": "STRING"},
+                        "payment_terms": {"type": "STRING"},
+                        "call_result": {"type": "STRING"},
+                        "next_contact_date": {"type": "STRING"},
+                        "next_steps": {"type": "ARRAY", "items": {"type": "STRING"}},
+                    },
+                }
+
+                prompt = (
+                    f"{ANALYSIS_SYSTEM_PROMPT}\n\n"
+                    + ANALYSIS_USER_PROMPT.format(
                         transcript=transcript,
                         call_type=call_type_ru,
-                        manager_name=manager_name
-                    )}
-                ],
-                temperature=0.1,
-                max_tokens=1200,
-                response_format={"type": "json_object"}
-            )
-            
-            result_text = response.choices[0].message.content
-            result_json = json.loads(result_text)
+                        manager_name=manager_name,
+                    )
+                )
+
+                response = await gemini.aio.models.generate_content(
+                    model=GEMINI_MODEL,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.1,
+                        max_output_tokens=1200,
+                        response_mime_type="application/json",
+                        response_schema=response_schema,
+                    ),
+                )
+
+                result_text = response.text or ""
+                result_json = json.loads(result_text)
+
+            else:
+                client = _get_client()
+                response = await client.chat.completions.create(
+                    model=OPENAI_MODEL,
+                    messages=[
+                        {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
+                        {"role": "user", "content": ANALYSIS_USER_PROMPT.format(
+                            transcript=transcript,
+                            call_type=call_type_ru,
+                            manager_name=manager_name
+                        )}
+                    ],
+                    temperature=0.1,
+                    max_tokens=1200,
+                    response_format={"type": "json_object"}
+                )
+
+                result_text = response.choices[0].message.content
+                result_json = json.loads(result_text)
 
             next_steps = result_json.get("next_steps") or []
             if not isinstance(next_steps, list):
