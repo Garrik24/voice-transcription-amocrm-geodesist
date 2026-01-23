@@ -490,7 +490,9 @@ async def upload_audio(
     lead_id: int = Form(...),
     call_type: str = Form("incoming_call"),
     phone: str = Form(""),
-    manager_name: str = Form("Менеджер")
+    manager_name: str = Form("Менеджер"),
+    # Unix timestamp (секунды или миллисекунды) из AmoCRM, если ваш MCP/интеграция его знает
+    call_created_at: Optional[int] = Form(None),
 ):
     """
     Загрузка аудиофайла вручную для транскрибации.
@@ -507,9 +509,6 @@ async def upload_audio(
       -F "call_type=incoming_call" \
       -F "phone=+79001234567"
     """
-    from datetime import datetime
-    from config import AMOCRM_DOMAIN
-    
     try:
         # Читаем файл
         audio_data = await file.read()
@@ -525,7 +524,8 @@ async def upload_audio(
             lead_id=lead_id,
             call_type=call_type,
             phone=phone,
-            manager_name=manager_name
+            manager_name=manager_name,
+            call_created_at=call_created_at,
         )
         
         return {
@@ -547,7 +547,8 @@ async def process_uploaded_audio(
     lead_id: int,
     call_type: str,
     phone: str,
-    manager_name: str
+    manager_name: str,
+    call_created_at: Optional[int] = None,
 ):
     """Обработка загруженного аудио (без скачивания)"""
     from datetime import datetime
@@ -596,7 +597,19 @@ async def process_uploaded_audio(
         logger.info(f"✅ Примечание успешно добавлено к leads/{lead_id}")
         
         # 6. Отправляем красивый анализ в Telegram
-        call_datetime = datetime.now().strftime("%d.%m.%Y %H:%M")
+        # Важно: если время звонка известно из AmoCRM, используем его и отображаем в нужной таймзоне.
+        from zoneinfo import ZoneInfo
+        from config import APP_TIMEZONE
+
+        if call_created_at:
+            ts = int(call_created_at)
+            # подстрахуемся: иногда timestamps приходят в миллисекундах
+            if ts > 10**12:
+                ts = ts // 1000
+            call_datetime = datetime.fromtimestamp(ts, tz=ZoneInfo(APP_TIMEZONE)).strftime("%d.%m.%Y %H:%M")
+        else:
+            # Если MCP не передал timestamp — берём текущее время в заданной таймзоне (а не UTC процесса).
+            call_datetime = datetime.now(ZoneInfo(APP_TIMEZONE)).strftime("%d.%m.%Y %H:%M")
         amocrm_url = f"https://{AMOCRM_DOMAIN}/leads/detail/{lead_id}"
         
         await telegram_service.send_call_analysis(
