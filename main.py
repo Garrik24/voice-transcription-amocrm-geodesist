@@ -205,6 +205,24 @@ async def process_call(
         try:
             await amocrm_service.add_note_to_entity(lead_id, note_text, target_entity_type)
             logger.info(f"✅ Примечание успешно добавлено к {target_entity_type}/{lead_id}")
+
+            # 7.1. Второе примечание: полная расшифровка разговора
+            minutes = int(transcription.duration_seconds // 60)
+            seconds = int(transcription.duration_seconds % 60)
+            duration_str = f"{minutes} мин {seconds} сек" if minutes else f"{seconds} сек"
+            call_type_str = "Входящий" if call_type_simple == "incoming" else "Исходящий"
+
+            full_transcript_note = (
+                "📜 ПОЛНАЯ РАСШИФРОВКА ЗВОНКА\n\n"
+                f"📞 {call_type_str} | {duration_str}\n\n"
+                f"{formatted_transcript}"
+            )
+            try:
+                await amocrm_service.add_note_to_entity(lead_id, full_transcript_note, target_entity_type)
+                logger.info(f"✅ Полная расшифровка добавлена к {target_entity_type}/{lead_id}")
+            except Exception as full_note_error:
+                # Не валим обработку: анализ уже сохранён, а полный текст можно починить отдельно
+                logger.error(f"❌ Ошибка добавления полной расшифровки к {target_entity_type}/{lead_id}: {full_note_error}")
         except Exception as note_error:
             logger.error(f"❌ Ошибка добавления примечания к {target_entity_type}/{lead_id}: {note_error}")
             # Проверяем, может быть это ID контакта, а не сделки?
@@ -223,7 +241,11 @@ async def process_call(
             # подстрахуемся: иногда timestamps приходят в миллисекундах
             if ts > 10**12:
                 ts = ts // 1000
-            call_datetime = datetime.fromtimestamp(ts, tz=ZoneInfo(APP_TIMEZONE)).strftime("%d.%m.%Y %H:%M")
+            # AmoCRM возвращает timestamp в UTC, конвертируем в московское время
+            # Сначала создаём datetime в UTC, затем переводим в нужную таймзону
+            utc_dt = datetime.fromtimestamp(ts, tz=ZoneInfo("UTC"))
+            local_dt = utc_dt.astimezone(ZoneInfo(APP_TIMEZONE))
+            call_datetime = local_dt.strftime("%d.%m.%Y %H:%M")
         else:
             call_datetime = datetime.now(ZoneInfo(APP_TIMEZONE)).strftime("%d.%m.%Y %H:%M")
         amocrm_url = f"https://{AMOCRM_DOMAIN}/{target_entity_type}/detail/{lead_id}"
@@ -595,6 +617,23 @@ async def process_uploaded_audio(
         logger.info(f"💾 Сохраняем примечание в leads/{lead_id}...")
         await amocrm_service.add_note_to_entity(lead_id, note_text, "leads")
         logger.info(f"✅ Примечание успешно добавлено к leads/{lead_id}")
+
+        # 5.1. Второе примечание: полная расшифровка разговора
+        minutes = int(transcription.duration_seconds // 60)
+        seconds = int(transcription.duration_seconds % 60)
+        duration_str = f"{minutes} мин {seconds} сек" if minutes else f"{seconds} сек"
+        call_type_str = "Входящий" if call_type_simple == "incoming" else "Исходящий"
+
+        full_transcript_note = (
+            "📜 ПОЛНАЯ РАСШИФРОВКА ЗВОНКА\n\n"
+            f"📞 {call_type_str} | {duration_str}\n\n"
+            f"{formatted_transcript}"
+        )
+        try:
+            await amocrm_service.add_note_to_entity(lead_id, full_transcript_note, "leads")
+            logger.info(f"✅ Полная расшифровка добавлена к leads/{lead_id}")
+        except Exception as full_note_error:
+            logger.error(f"❌ Ошибка добавления полной расшифровки к leads/{lead_id}: {full_note_error}")
         
         # 6. Отправляем красивый анализ в Telegram
         # Важно: если время звонка известно из AmoCRM, используем его и отображаем в нужной таймзоне.
@@ -606,7 +645,11 @@ async def process_uploaded_audio(
             # подстрахуемся: иногда timestamps приходят в миллисекундах
             if ts > 10**12:
                 ts = ts // 1000
-            call_datetime = datetime.fromtimestamp(ts, tz=ZoneInfo(APP_TIMEZONE)).strftime("%d.%m.%Y %H:%M")
+            # AmoCRM возвращает timestamp в UTC, конвертируем в московское время
+            # Сначала создаём datetime в UTC, затем переводим в нужную таймзону
+            utc_dt = datetime.fromtimestamp(ts, tz=ZoneInfo("UTC"))
+            local_dt = utc_dt.astimezone(ZoneInfo(APP_TIMEZONE))
+            call_datetime = local_dt.strftime("%d.%m.%Y %H:%M")
         else:
             # Если MCP не передал timestamp — берём текущее время в заданной таймзоне (а не UTC процесса).
             call_datetime = datetime.now(ZoneInfo(APP_TIMEZONE)).strftime("%d.%m.%Y %H:%M")
@@ -619,11 +662,15 @@ async def process_uploaded_audio(
             manager_name=analysis.manager_name,
             client_name=analysis.client_name,
             summary=analysis.summary,
-            manager_rating=analysis.manager_rating,
-            what_good=analysis.what_good,
-            what_improve=analysis.what_improve,
             amocrm_url=amocrm_url,
-            record_url=""
+            record_url="",
+            client_city=analysis.client_city,
+            work_type=analysis.work_type,
+            cost=analysis.cost,
+            payment_terms=analysis.payment_terms,
+            call_result=analysis.call_result,
+            next_contact_date=analysis.next_contact_date,
+            next_steps=analysis.next_steps,
         )
         
         logger.info(f"✅ Загруженный файл для сделки #{lead_id} обработан!")

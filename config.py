@@ -32,6 +32,24 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-001")
 
+# ============== AI Analysis Settings ==============
+# Максимальное количество токенов для ответа (увеличено для длинных звонков)
+# Для коротких звонков (< 3 мин): 1200 токенов достаточно
+# Для длинных звонков (5+ мин): нужно 2500-3000 токенов
+OPENAI_MAX_TOKENS = int(os.getenv("OPENAI_MAX_TOKENS", "2500"))
+GEMINI_MAX_OUTPUT_TOKENS = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "3000"))
+
+# Температура для анализа (низкая = более точные факты)
+ANALYSIS_TEMPERATURE = float(os.getenv("ANALYSIS_TEMPERATURE", "0.1"))
+
+# Максимальная длина транскрипции для анализа (символов)
+# Если транскрипция длиннее - берём начало и конец (где обычно ключевая информация)
+MAX_TRANSCRIPT_LENGTH = int(os.getenv("MAX_TRANSCRIPT_LENGTH", "15000"))
+
+# Обрезать транскрипцию для анализа (экономия токенов).
+# По умолчанию ВЫКЛЮЧЕНО: для звонков до ~30 минут хотим анализировать весь текст без потерь.
+TRUNCATE_TRANSCRIPT_FOR_ANALYSIS = os.getenv("TRUNCATE_TRANSCRIPT_FOR_ANALYSIS", "false").strip().lower() == "true"
+
 # ============== Telegram ==============
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # ID чата для уведомлений об ошибках
