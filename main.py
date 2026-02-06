@@ -241,13 +241,17 @@ async def process_call(
             # подстрахуемся: иногда timestamps приходят в миллисекундах
             if ts > 10**12:
                 ts = ts // 1000
-            # AmoCRM возвращает timestamp в UTC, конвертируем в московское время
-            # Сначала создаём datetime в UTC, затем переводим в нужную таймзону
+            # DEBUG: логируем raw timestamp и все интерпретации
+            logger.info(f"🕐 DEBUG TZ: raw call_created_at={call_created_at}, ts={ts}, APP_TIMEZONE={APP_TIMEZONE}")
             utc_dt = datetime.fromtimestamp(ts, tz=ZoneInfo("UTC"))
             local_dt = utc_dt.astimezone(ZoneInfo(APP_TIMEZONE))
+            logger.info(f"🕐 DEBUG TZ: utc={utc_dt.strftime('%d.%m.%Y %H:%M')}, local({APP_TIMEZONE})={local_dt.strftime('%d.%m.%Y %H:%M')}")
             call_datetime = local_dt.strftime("%d.%m.%Y %H:%M")
         else:
+            logger.info(f"🕐 DEBUG TZ: call_created_at is None/empty, using datetime.now({APP_TIMEZONE})")
             call_datetime = datetime.now(ZoneInfo(APP_TIMEZONE)).strftime("%d.%m.%Y %H:%M")
+
+        logger.info(f"🕐 DEBUG TZ: final call_datetime={call_datetime}")
         amocrm_url = f"https://{AMOCRM_DOMAIN}/{target_entity_type}/detail/{lead_id}"
         
         await telegram_service.send_call_analysis(
@@ -417,12 +421,14 @@ async def amocrm_webhook(request: Request, background_tasks: BackgroundTasks):
         call_type = "incoming_call" if actual_note_type == "call_in" else "outgoing_call"
         
         # 9. Запускаем обработку в фоне
+        raw_created_at = note_data.get("created_at")
+        logger.info(f"🕐 DEBUG: note_data created_at={raw_created_at} (type={type(raw_created_at).__name__})")
         background_tasks.add_task(
             process_call,
             entity_id=element_id,
             call_type=call_type,
             record_url=record_url,
-            call_created_at=note_data.get("created_at"),
+            call_created_at=raw_created_at,
             responsible_user_id=responsible_user_id or note_data.get("responsible_user_id"),
             phone=phone,
             entity_type=entity_type
@@ -645,14 +651,16 @@ async def process_uploaded_audio(
             # подстрахуемся: иногда timestamps приходят в миллисекундах
             if ts > 10**12:
                 ts = ts // 1000
-            # AmoCRM возвращает timestamp в UTC, конвертируем в московское время
-            # Сначала создаём datetime в UTC, затем переводим в нужную таймзону
+            logger.info(f"🕐 DEBUG TZ (upload): raw call_created_at={call_created_at}, ts={ts}, APP_TIMEZONE={APP_TIMEZONE}")
             utc_dt = datetime.fromtimestamp(ts, tz=ZoneInfo("UTC"))
             local_dt = utc_dt.astimezone(ZoneInfo(APP_TIMEZONE))
+            logger.info(f"🕐 DEBUG TZ (upload): utc={utc_dt.strftime('%d.%m.%Y %H:%M')}, local({APP_TIMEZONE})={local_dt.strftime('%d.%m.%Y %H:%M')}")
             call_datetime = local_dt.strftime("%d.%m.%Y %H:%M")
         else:
-            # Если MCP не передал timestamp — берём текущее время в заданной таймзоне (а не UTC процесса).
+            logger.info(f"🕐 DEBUG TZ (upload): call_created_at is None/empty, using datetime.now({APP_TIMEZONE})")
             call_datetime = datetime.now(ZoneInfo(APP_TIMEZONE)).strftime("%d.%m.%Y %H:%M")
+
+        logger.info(f"🕐 DEBUG TZ (upload): final call_datetime={call_datetime}")
         amocrm_url = f"https://{AMOCRM_DOMAIN}/leads/detail/{lead_id}"
         
         await telegram_service.send_call_analysis(
