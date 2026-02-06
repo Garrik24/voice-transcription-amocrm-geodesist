@@ -232,26 +232,21 @@ async def process_call(
             raise
         
         # 8. Отправляем красивый анализ в Telegram
-        # Важно: берём время звонка из AmoCRM (created_at) и отображаем в нужной таймзоне.
-        from zoneinfo import ZoneInfo
-        from config import APP_TIMEZONE
+        # Время: Railway работает в UTC, для Москвы всегда +3 часа.
+        from datetime import timedelta
 
         if call_created_at:
             ts = int(call_created_at)
-            # подстрахуемся: иногда timestamps приходят в миллисекундах
             if ts > 10**12:
                 ts = ts // 1000
-            # DEBUG: логируем raw timestamp и все интерпретации
-            logger.info(f"🕐 DEBUG TZ: raw call_created_at={call_created_at}, ts={ts}, APP_TIMEZONE={APP_TIMEZONE}")
-            utc_dt = datetime.fromtimestamp(ts, tz=ZoneInfo("UTC"))
-            local_dt = utc_dt.astimezone(ZoneInfo(APP_TIMEZONE))
-            logger.info(f"🕐 DEBUG TZ: utc={utc_dt.strftime('%d.%m.%Y %H:%M')}, local({APP_TIMEZONE})={local_dt.strftime('%d.%m.%Y %H:%M')}")
-            call_datetime = local_dt.strftime("%d.%m.%Y %H:%M")
+            utc_dt = datetime.utcfromtimestamp(ts)
+            moscow_dt = utc_dt + timedelta(hours=3)
+            call_datetime = moscow_dt.strftime("%d.%m.%Y %H:%M")
+            logger.info(f"🕐 Время звонка: UTC={utc_dt.strftime('%H:%M')} → МСК={call_datetime}")
         else:
-            logger.info(f"🕐 DEBUG TZ: call_created_at is None/empty, using datetime.now({APP_TIMEZONE})")
-            call_datetime = datetime.now(ZoneInfo(APP_TIMEZONE)).strftime("%d.%m.%Y %H:%M")
-
-        logger.info(f"🕐 DEBUG TZ: final call_datetime={call_datetime}")
+            moscow_dt = datetime.utcnow() + timedelta(hours=3)
+            call_datetime = moscow_dt.strftime("%d.%m.%Y %H:%M")
+            logger.info(f"🕐 Время звонка (текущее): МСК={call_datetime}")
         amocrm_url = f"https://{AMOCRM_DOMAIN}/{target_entity_type}/detail/{lead_id}"
         
         await telegram_service.send_call_analysis(
@@ -642,25 +637,21 @@ async def process_uploaded_audio(
             logger.error(f"❌ Ошибка добавления полной расшифровки к leads/{lead_id}: {full_note_error}")
         
         # 6. Отправляем красивый анализ в Telegram
-        # Важно: если время звонка известно из AmoCRM, используем его и отображаем в нужной таймзоне.
-        from zoneinfo import ZoneInfo
-        from config import APP_TIMEZONE
+        # Время: Railway работает в UTC, для Москвы всегда +3 часа.
+        from datetime import timedelta
 
         if call_created_at:
             ts = int(call_created_at)
-            # подстрахуемся: иногда timestamps приходят в миллисекундах
             if ts > 10**12:
                 ts = ts // 1000
-            logger.info(f"🕐 DEBUG TZ (upload): raw call_created_at={call_created_at}, ts={ts}, APP_TIMEZONE={APP_TIMEZONE}")
-            utc_dt = datetime.fromtimestamp(ts, tz=ZoneInfo("UTC"))
-            local_dt = utc_dt.astimezone(ZoneInfo(APP_TIMEZONE))
-            logger.info(f"🕐 DEBUG TZ (upload): utc={utc_dt.strftime('%d.%m.%Y %H:%M')}, local({APP_TIMEZONE})={local_dt.strftime('%d.%m.%Y %H:%M')}")
-            call_datetime = local_dt.strftime("%d.%m.%Y %H:%M")
+            utc_dt = datetime.utcfromtimestamp(ts)
+            moscow_dt = utc_dt + timedelta(hours=3)
+            call_datetime = moscow_dt.strftime("%d.%m.%Y %H:%M")
+            logger.info(f"🕐 Время звонка (upload): UTC={utc_dt.strftime('%H:%M')} → МСК={call_datetime}")
         else:
-            logger.info(f"🕐 DEBUG TZ (upload): call_created_at is None/empty, using datetime.now({APP_TIMEZONE})")
-            call_datetime = datetime.now(ZoneInfo(APP_TIMEZONE)).strftime("%d.%m.%Y %H:%M")
-
-        logger.info(f"🕐 DEBUG TZ (upload): final call_datetime={call_datetime}")
+            moscow_dt = datetime.utcnow() + timedelta(hours=3)
+            call_datetime = moscow_dt.strftime("%d.%m.%Y %H:%M")
+            logger.info(f"🕐 Время звонка (upload, текущее): МСК={call_datetime}")
         amocrm_url = f"https://{AMOCRM_DOMAIN}/leads/detail/{lead_id}"
         
         await telegram_service.send_call_analysis(

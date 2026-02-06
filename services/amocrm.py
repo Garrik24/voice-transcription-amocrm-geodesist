@@ -279,50 +279,75 @@ class AmoCRMService:
             logger.error(f"Ошибка получения звонков для {entity_type}/{entity_id}: {e}")
             return []
     
-    async def download_call_recording(self, url: str) -> bytes:
+    async def download_call_recording(self, url: str, max_retries: int = 3) -> bytes:
         """
         Скачивает аудиофайл записи звонка.
         Обходит проверку SSL для серверов с невалидными сертификатами.
+        При 404 делает повторные попытки с задержкой (запись может быть ещё не готова).
         
         Args:
             url: URL записи звонка
+            max_retries: Максимальное количество попыток при 404
             
         Returns:
             Бинарные данные аудиофайла
         """
         import ssl
         import httpx
+        import asyncio
         
-        try:
-            logger.info(f"📥 Скачиваем запись: {url[:80]}...")
-            
-            # Создаём SSL контекст, который полностью игнорирует проверку сертификатов
-            ssl_ctx = ssl.create_default_context()
-            ssl_ctx.check_hostname = False
-            ssl_ctx.verify_mode = ssl.CERT_NONE
-            
-            async with httpx.AsyncClient(
-                follow_redirects=True, 
-                timeout=120.0, 
-                verify=ssl_ctx  # Используем кастомный SSL контекст
-            ) as client:
-                # Сначала пробуем без авторизации
-                response = await client.get(url)
-                
-                # Если требует авторизации, пробуем с ней
-                if response.status_code in [401, 403]:
-                    response = await client.get(url, headers=self.headers)
-                
-                response.raise_for_status()
-                
-                content_length = len(response.content)
-                logger.info(f"✅ Скачано: {content_length} байт")
-                
-                return response.content
-                
-        except Exception as e:
-            logger.error(f"❌ Ошибка скачивания: {e}")
-            raise
+        logger.info(f"📥 Скачиваем запись: {url[:80]}...")
+        
+        # Создаём SSL контекст, который полностью игнорирует проверку сертификатов
+        ssl_ctx = ssl.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl.CERT_NONE
+        
+        last_error = None
+        # Задержки между попытками: 30с, 60с, 90с
+        retry_delays = [30, 60, 90]
+        
+        for attempt in range(max_retries):
+            try:
+                async with httpx.AsyncClient(
+                    follow_redirects=True, 
+                    timeout=120.0, 
+                    verify=ssl_ctx
+                ) as client:
+                    response = await client.get(url)
+                    
+                    # Если требует авторизации, пробуем с ней
+                    if response.status_code in [401, 403]:
+                        response = await client.get(url, headers=self.headers)
+                    
+                    # Если 404 и есть ещё попытки — ждём и повторяем
+                    if response.status_code == 404 and attempt < max_retries - 1:
+                        delay = retry_delays[attempt]
+                        logger.warning(f"⏳ Запись не готова (404), попытка {attempt + 1}/{max_retries}. Ждём {delay}с...")
+                        await asyncio.sleep(delay)
+                        continue
+                    
+                    response.raise_for_status()
+                    
+                    content_length = len(response.content)
+                    if attempt > 0:
+                        logger.info(f"✅ Скачано с попытки {attempt + 1}: {content_length} байт")
+                    else:
+                        logger.info(f"✅ Скачано: {content_length} байт")
+                    
+                    return response.content
+                    
+            except Exception as e:
+                last_error = e
+                # Если это НЕ 404, не ретраим
+                if "404" not in str(e) or attempt >= max_retries - 1:
+                    logger.error(f"❌ Ошибка скачивания (попытка {attempt + 1}/{max_retries}): {e}")
+                    raise
+                delay = retry_delays[attempt]
+                logger.warning(f"⏳ Ошибка скачивания (попытка {attempt + 1}/{max_retries}): {e}. Ждём {delay}с...")
+                await asyncio.sleep(delay)
+        
+        raise last_error or Exception("Не удалось скачать запись после всех попыток")
     
     async def get_lead(self, lead_id: int) -> Optional[Dict[str, Any]]:
         """
